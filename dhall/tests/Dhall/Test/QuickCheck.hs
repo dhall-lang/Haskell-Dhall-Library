@@ -397,6 +397,7 @@ instance (Arbitrary s, Arbitrary a) => Arbitrary (Expr s a) where
             % (7 :: W "RecordCompletion")
             % (1 :: W "Merge")
             % (1 :: W "ToMap")
+            % (1 :: W "ToJSON")
             % (7 :: W "Field")
             % (7 :: W "Project")
             % (1 :: W "Assert")

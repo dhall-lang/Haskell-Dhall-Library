@@ -557,6 +557,7 @@ normalizeWithM ctx e0 = loop (Syntax.denote e0)
                 return (ListLit listType keyValues)
             _ ->
                 return (ToMap x' t')
+    ToJSON _x _t -> error "ToJSON not implemented"
     Field r k@FieldSelection{fieldSelectionLabel = x}        -> do
         let singletonRecordLit v = RecordLit (Dhall.Map.singleton x v)
 
@@ -814,6 +815,7 @@ isNormalized e0 = loop (Syntax.denote e0)
       ToMap x t -> case x of
           RecordLit _ -> False
           _ -> loop x && all loop t
+      ToJSON _x _t -> error "ToJSON is not implemented"
       Field r (FieldSelection Nothing k Nothing) -> case r of
           RecordLit _ -> False
           Project _ _ -> False

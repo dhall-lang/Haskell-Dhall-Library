@@ -37,6 +37,7 @@ module Dhall.Parser.Token (
     _using,
     _merge,
     _toMap,
+    _toJSON,
     _assert,
     _Some,
     _None,
@@ -845,6 +846,14 @@ _merge = keyword "merge"
 -}
 _toMap :: Parser ()
 _toMap = keyword "toMap"
+
+{-| Parse @toJSON@ keyword
+
+    This DO NOT correspont to the official grammar because it is quick
+    and dirty hack.
+-}
+_toJSON :: Parser ()
+_toJSON = keyword "toJSON"
 
 {-| Parse the @assert@ keyword
 

@@ -47,6 +47,7 @@ import Dhall.Eval
     , Names (..)
     , Val (..)
     , (~>)
+    , vJSON
     )
 import Dhall.Pretty                      (Ann)
 import Dhall.Src                         (Src)
@@ -1116,6 +1117,8 @@ infer typer = loop
                        let _T₁'' = quote names _T₁'
 
                        die (MapTypeMismatch (quote names (mapType _T')) _T₁'')
+
+        ToJSON _e _mt -> return vJSON
 
         Field e (Syntax.fieldSelectionLabel -> x) -> do
             _E' <- loop ctx e

@@ -47,6 +47,7 @@ module Dhall.Eval (
   , Environment(..)
   , Val(..)
   , (~>)
+  , vJSON
   , textShow
   ) where
 
@@ -58,6 +59,7 @@ import Dhall.Map     (Map)
 import Dhall.Set     (Set)
 import GHC.Natural   (Natural)
 import Prelude       hiding (succ)
+import GHC.Generics
 
 import Dhall.Syntax
     ( Binding (..)
@@ -76,6 +78,7 @@ import qualified Data.Sequence as Sequence
 import qualified Data.Set
 import qualified Data.Text     as Text
 import qualified Dhall.Map     as Map
+import qualified Dhall.Map
 import qualified Dhall.Set
 import qualified Dhall.Syntax  as Syntax
 import qualified Text.Printf
@@ -227,6 +230,22 @@ deriving instance (Show a, Show (Val a -> Val a)) => Show (Val a)
 (~>) :: Val a -> Val a -> Val a
 (~>) a b = VHPi "_" a (\_ -> b)
 {-# INLINE (~>) #-}
+
+vJSON :: Val a
+vJSON = VHPi "t" (VConst Type) (\t ->
+              (VRecord (Dhall.Map.fromList [
+              ("array", (VList t) ~> t),
+              ("bool", VBool ~> t),
+              ("double", VDouble ~> t),
+              ("integer", VInteger ~> t),
+              ("null", t),
+              ("object", VList (VRecord (Dhall.Map.fromList [
+                ("mapKey", VText),
+                ("mapValue", t)
+              ])) ~> t),
+              ("string", VText ~> t)
+            ])) ~> t)
+
 
 infixr 5 ~>
 
@@ -711,6 +730,35 @@ eval !env t0 =
                     in  VListLit Nothing s
                 (x', ma') ->
                     VToMap x' ma'
+        ToJSON x _ma ->
+          let 
+              field :: Text -> Expr s a -> (Text, Syntax.RecordField s a)
+              field name e = (name, Syntax.makeRecordField e)
+
+              jsonS :: Val a -> Val a
+              jsonS t = VRecord (Dhall.Map.fromList
+                [ ("array", (VList t) ~> t)
+                , ("bool", VBool ~> t)
+                , ("double", VDouble ~> t)
+                , ("integer", VInteger ~> t)
+                , ("null", t)
+                , ("string", VText ~> t)
+                , ("object", VList (VRecord (Dhall.Map.fromList
+                    [ ("mapKey", VText)
+                    , ("mapValue", t)
+                    ])) ~> t)
+                ])
+
+              json :: (Val a -> Val a -> Val a) -> Val a
+              json f = VHPi "t" (VConst Type)
+                        (\t -> (VHPi "json" (jsonS t) (f t)))
+
+              integer :: Integer -> Val a
+              integer n = json $ \t j -> vApp (vField j "integer") (VIntegerLit n)
+
+         in case eval env x of
+          VIntegerLit n -> integer n
+
         Field t (Syntax.fieldSelectionLabel -> k) ->
             vField (eval env t) k
         Project t (Left ks) ->
@@ -1292,6 +1340,8 @@ alphaNormalize = goEnv EmptyNames
                 Merge (go x) (go y) (fmap go ma)
             ToMap x ma ->
                 ToMap (go x) (fmap go ma)
+            ToJSON x ma ->
+                ToJSON (go x) (fmap go ma)
             Field t k ->
                 Field (go t) k
             Project t ks ->
