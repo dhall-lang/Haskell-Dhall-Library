@@ -33,6 +33,8 @@ import Dhall
 import Dhall.Core
     ( Binding (..)
     , Chunks (..)
+    , Comment (..)
+    , CommentType (..)
     , Const (..)
     , DhallDouble (..)
     , Directory (..)
@@ -45,6 +47,7 @@ import Dhall.Core
     , ImportHashed (..)
     , ImportMode (..)
     , ImportType (..)
+    , MultiComment (..)
     , PreferAnnotation (..)
     , RecordField (..)
     , Scheme (..)
@@ -85,6 +88,7 @@ import qualified Data.Foldable         as Foldable
 import qualified Data.HashMap.Strict   as HashMap
 import qualified Data.HashSet
 import qualified Data.List
+import qualified Data.List.NonEmpty
 import qualified Data.Map
 import qualified Data.Sequence
 import qualified Data.Set
@@ -168,53 +172,72 @@ integer =
         ]
 
 whitespace :: Gen Text
-whitespace = do
-      let commentChar =
-              Test.QuickCheck.frequency
-                  [ (20, Test.QuickCheck.elements [' ' .. '\DEL'])
-                  , ( 1, arbitrary)
-                  ]
+whitespace =
+    Text.concat <$> Test.QuickCheck.listOf (Test.QuickCheck.elements [" ", "\t", "\n", "\r\n"])
 
-          noInteriorBlockComments text =
-              not (Text.isInfixOf "{-" text || Text.isInfixOf "-}" text)
+comment :: Gen Comment
+comment = do
+    let validNonAsciiOrTab c = ('\x20' <= c && c <= '\x10FFFF') || c == '\t'
 
-          commentText =
-              suchThat
-                  (Text.pack <$> Test.QuickCheck.listOf commentChar)
-                  noInteriorBlockComments
+        commentChar multiLine =
+            Test.QuickCheck.frequency $
+                [ (20, Test.QuickCheck.elements [' ' .. '\DEL'])
+                , ( 1, arbitrary `suchThat` validNonAsciiOrTab)
+                ] ++
+                [ (1, pure '\n') | multiLine ]
 
-          multiline = do
-              txt <- commentText
-              pure $ "{-" <> txt <> "-}"
+        noInteriorBlockComments text =
+            not (Text.isInfixOf "{-" text || Text.isInfixOf "-}" text)
 
-          singleline = do
-              txt <- commentText `suchThat` (not . Text.isInfixOf "\n")
-              endOfLine <- Test.QuickCheck.elements ["\n", "\r\n"]
-              pure $ "--" <> txt <> endOfLine
+        commentText multiLine =
+            suchThat
+                (Text.pack <$> Test.QuickCheck.listOf (commentChar multiLine))
+                noInteriorBlockComments
 
-          newlines = Text.concat <$> Test.QuickCheck.listOf (pure "\n")
+        renderDoc DocComment = "|"
+        renderDoc _          = mempty
 
-      comments <- do
-          n <- Test.QuickCheck.choose (0, 2)
-          Test.QuickCheck.vectorOf n $ Test.QuickCheck.oneof
-              [ multiline
-              , singleline
-              , newlines
-              ]
+        blockComment = do
+            commentType <- arbitrary
+            txt <- commentText True
+            pure . BlockComment commentType $ "{-" <> renderDoc commentType <> txt <> "-}"
 
-      pure $ Text.unlines comments
+        rawLineComment = do
+            txt <- commentText False
+            endOfLine <- Test.QuickCheck.elements ["\n", "\r\n"]
+            pure (txt <> endOfLine)
+
+        lineComment = do
+            commentType <- arbitrary
+
+            firstLineComment <- do
+                l <- rawLineComment
+                pure ("--" <> renderDoc commentType <> l)
+
+            lineComments <- Test.QuickCheck.listOf $ do
+                l <- rawLineComment
+                pure ("--" <> l)
+
+            pure . LineComment commentType $
+                firstLineComment Data.List.NonEmpty.:| lineComments
+
+    Test.QuickCheck.oneof
+        [ blockComment
+        , lineComment
+        ]
 
 shrinkWhitespace :: Text -> [Text]
 shrinkWhitespace "" = []
 shrinkWhitespace _  = [""]
 
+instance Arbitrary CommentType where
+    arbitrary = Test.QuickCheck.elements [ DocComment, RawComment ]
+
 instance Arbitrary CharacterSet where
     arbitrary = Test.QuickCheck.elements [ ASCII, Unicode ]
 
 instance Arbitrary Header where
-    arbitrary = createHeader <$> whitespace
-
-    shrink (Header text) = Header <$> shrinkWhitespace text
+    arbitrary = createHeader <$> arbitrary
 
 instance (Arbitrary v) => Arbitrary (Map Text v) where
     arbitrary = do
@@ -230,15 +253,17 @@ instance (Arbitrary v) => Arbitrary (Map Text v) where
 
 instance (Arbitrary s, Arbitrary a) => Arbitrary (Binding s a) where
     arbitrary = do
-        bindingSrc0 <- arbitrary
+        bindingComment0 <- arbitrary
 
         variable <- Test.QuickCheck.oneof [ pure "_", label ]
 
-        bindingSrc1 <- arbitrary
+        let variableSrc = Nothing
+
+        bindingComment1 <- arbitrary
 
         annotation <- arbitrary
 
-        bindingSrc2 <- arbitrary
+        bindingComment2 <- arbitrary
 
         value <- arbitrary
 
@@ -279,20 +304,28 @@ instance (Arbitrary s, Arbitrary a) => Arbitrary (PreferAnnotation s a) where
             ]
 
 instance (Arbitrary s, Arbitrary a) => Arbitrary (RecordField s a) where
-    arbitrary = lift4 RecordField
+    arbitrary =
+        RecordField <$> arbitrary <*> pure Nothing <*> arbitrary <*> arbitrary <*> arbitrary
 
     shrink = genericShrink
 
 instance (Arbitrary s, Arbitrary a) => Arbitrary (FunctionBinding s a) where
     arbitrary = do
+        c0 <- arbitrary
         l <- label
+        c1 <- arbitrary
+        c2 <- arbitrary
         type_ <- arbitrary
-        return $ FunctionBinding Nothing l Nothing Nothing type_
+        return $ FunctionBinding c0 l Nothing c1 c2 type_
 
     shrink = genericShrink
 
 instance Arbitrary s => Arbitrary (FieldSelection s) where
-    arbitrary = FieldSelection <$> pure Nothing <*> label <*> pure Nothing
+    arbitrary = do
+        c0 <- arbitrary
+        c1 <- arbitrary
+        l <- label
+        pure $ FieldSelection c0 c1 l Nothing
     shrink = genericShrink
 
 instance (Arbitrary s, Arbitrary a) => Arbitrary (Expr s a) where
@@ -454,6 +487,12 @@ instance Arbitrary FilePrefix where
     arbitrary = Test.QuickCheck.oneof [ pure Absolute, pure Here, pure Home ]
 
     shrink = genericShrink
+
+instance Arbitrary Comment where
+    arbitrary = comment
+
+instance Arbitrary MultiComment where
+    arbitrary = MultiComment <$> arbitrary
 
 instance Arbitrary Src where
     arbitrary = do
@@ -704,9 +743,33 @@ idempotenceTest :: CharacterSet -> Header -> Expr Src Import -> Property
 idempotenceTest characterSet header expr =
         not (any hasHttpHeaders expr)
     ==> let once = format characterSet (header, expr)
-        in case Parser.exprAndHeaderFromText mempty once of
+        in case Parser.exprAndHeaderFromText Parser.UnsupportedCommentsPermitted mempty once of
             Right (format characterSet -> twice) -> once === twice
             Left _ -> Test.QuickCheck.discard
+  where
+    -- Workaround for https://github.com/dhall-lang/dhall-haskell/issues/1925.
+    hasHttpHeaders = \case
+        Import (ImportHashed _ (Remote (URL { headers = Just _ }))) _ -> True
+        _                                                             -> False
+
+commentAsWhitespace :: CharacterSet -> Expr Src Import -> Property
+commentAsWhitespace characterSet expr =
+        not (any hasHttpHeaders expr)
+    ==> let addComments =
+                  Text.replace " " "{--}"
+                . Text.replace "\n" "--\n"
+
+            txt = addComments (format characterSet (Header mempty, expr))
+
+            denote :: Expr Src Import -> Expr Void Import
+            denote = Dhall.Core.denote
+
+            report = "\nText input was:\n\n" <> show txt <> "\n"
+
+        in Test.QuickCheck.counterexample report $
+            case Parser.exprAndHeaderFromText Parser.UnsupportedCommentsForbidden mempty txt of
+              Right (_, expr') -> denote expr === denote expr'
+              Left e -> error (show e)
   where
     -- Workaround for https://github.com/dhall-lang/dhall-haskell/issues/1925.
     hasHttpHeaders = \case
@@ -762,6 +825,15 @@ tests =
         , ( "Formatting should be idempotent"
           , Test.QuickCheck.property idempotenceTest
           , adjustQuickCheckTests 10000
+          )
+        , ( "Any whitespace could be a comment and still parse"
+          , Test.QuickCheck.property commentAsWhitespace
+          , -- Currently this test is disabled as it doesn't hold yet
+            --
+            -- To quickly test it from the CLI:
+            --
+            -- $ cabal test tasty --test-option=--quickcheck-tests=10 --test-option=--pattern='Any whitespace'
+            Test.Tasty.adjustOption (\n -> if n == 100 then QuickCheckTests 0 else n)
           )
         ]
 

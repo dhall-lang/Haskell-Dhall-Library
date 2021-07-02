@@ -686,7 +686,7 @@ diff l r@(BoolIf {}) =
 diff l@(Let {}) r@(Let {}) =
     enclosed' "    " (keyword "in" <> "  ") (docs l r)
   where
-    docs (Let (Binding _ aL _ bL _ cL) dL) (Let (Binding _ aR _ bR _ cR) dR) =
+    docs (Let (Binding _ aL _ _ bL _ cL) dL) (Let (Binding _ aR _ _ bR _ cR) dR) =
         Data.List.NonEmpty.cons (align doc) (docs dL dR)
       where
         bL' = fmap snd bL

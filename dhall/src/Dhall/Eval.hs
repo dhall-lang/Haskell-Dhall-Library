@@ -435,7 +435,7 @@ eval !env t0 =
             VPi (eval env a) (Closure x env b)
         App t u ->
             vApp (eval env t) (eval env u)
-        Let (Binding _ x _ _mA _ a) b ->
+        Let (Binding _ x _ _ _mA _ a) b ->
             let !env' = Extend env x (eval env a)
             in  eval env' b
         Annot t _ ->
@@ -1268,14 +1268,14 @@ alphaNormalize = goEnv EmptyNames
                 Const k
             Var (V x i) ->
                 goVar e0 x i
-            Lam cs (FunctionBinding src0 x src1 src2 t) u ->
-                Lam cs (FunctionBinding src0 "_" src1 src2 (go t)) (goBind x u)
+            Lam cs (FunctionBinding c0 x s c1 c2 t) u ->
+                Lam cs (FunctionBinding c0 "_" s c1 c2 (go t)) (goBind x u)
             Pi cs x a b ->
                 Pi cs "_" (go a) (goBind x b)
             App t u ->
                 App (go t) (go u)
-            Let (Binding src0 x src1 mA src2 a) b ->
-                Let (Binding src0 "_" src1 (fmap (fmap go) mA) src2 (go a)) (goBind x b)
+            Let (Binding comment0 x src comment1 mA comment2 a) b ->
+                Let (Binding comment0 "_" src comment1 (fmap (fmap go) mA) comment2 (go a)) (goBind x b)
             Annot t u ->
                 Annot (go t) (go u)
             Bool ->
@@ -1408,4 +1408,4 @@ alphaNormalize = goEnv EmptyNames
         go                     = goEnv e0
         goBind x               = goEnv (Bind e0 x)
         goChunks (Chunks ts x) = Chunks (fmap (fmap go) ts) x
-        goRecordField (RecordField s0 e s1 s2) = RecordField s0 (go e) s1 s2
+        goRecordField (RecordField c0 s e c1 c2) = RecordField c0 s (go e) c1 c2

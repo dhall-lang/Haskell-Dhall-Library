@@ -50,7 +50,7 @@ lintTest prefix =
 
         inputText <- Text.IO.readFile inputFile
 
-        (header, parsedInput) <- Core.throws (Parser.exprAndHeaderFromText mempty inputText)
+        (header, parsedInput) <- Core.throws (Parser.exprAndHeaderFromText Parser.UnsupportedCommentsPermitted mempty inputText)
 
         let actualExpression = Lint.lint parsedInput
 

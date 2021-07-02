@@ -19,6 +19,8 @@ module Dhall.Parser (
     , SourcedException(..)
     , ParseError(..)
     , Parser(..)
+    , runParser
+    , WhitespaceControl (..)
     ) where
 
 import Control.Exception (Exception)
@@ -28,13 +30,15 @@ import Dhall.Src         (Src (..))
 import Dhall.Syntax
 import Text.Megaparsec   (ParseErrorBundle (..), PosState (..))
 
-import qualified Data.Text       as Text
-import qualified Dhall.Core      as Core
+import qualified Data.Text.Prettyprint.Doc             as Pretty
+import qualified Data.Text.Prettyprint.Doc.Render.Text as Pretty
+import qualified Dhall.Core                            as Core
+import qualified Dhall.Pretty
 import qualified Text.Megaparsec
 
 import Dhall.Parser.Combinators
 import Dhall.Parser.Expression
-import Dhall.Parser.Token       hiding (text)
+import Dhall.Pretty.Internal    (renderComment)
 
 -- | Parser for a top-level Dhall expression
 expr :: Parser (Expr Src Import)
@@ -82,7 +86,7 @@ exprFromText
             --   used in parsing error messages
   -> Text   -- ^ Input expression to parse
   -> Either ParseError (Expr Src Import)
-exprFromText delta text = fmap snd (exprAndHeaderFromText delta text)
+exprFromText delta text = fmap snd (exprAndHeaderFromText UnsupportedCommentsPermitted delta text)
 
 -- | A header corresponds to the leading comment at the top of a Dhall file.
 --
@@ -91,41 +95,28 @@ exprFromText delta text = fmap snd (exprAndHeaderFromText delta text)
 newtype Header = Header Text deriving Show
 
 -- | Create a header with stripped leading spaces and trailing newlines
-createHeader :: Text -> Header
-createHeader text = Header (prefix <> newSuffix)
-  where
-    isWhitespace c = c == ' ' || c == '\n' || c == '\r' || c == '\t'
-
-    prefix = Text.dropAround isWhitespace text
-
-    newSuffix
-        | Text.null prefix = ""
-        | otherwise        = "\n"
+createHeader :: Maybe MultiComment -> Header
+createHeader Nothing = Header ""
+createHeader (Just mc) = Header . Pretty.renderStrict . Dhall.Pretty.layout $
+    renderComment False mc <> Pretty.hardline
 
 -- | Like `exprFromText` but also returns the leading comments and whitespace
 -- (i.e. header) up to the last newline before the code begins
---
--- In other words, if you have a Dhall file of the form:
---
--- > -- Comment 1
--- > {- Comment -} 2
---
--- Then this will preserve @Comment 1@, but not @Comment 2@
---
--- This is used by @dhall-format@ to preserve leading comments and whitespace
 exprAndHeaderFromText
-    :: String -- ^ User-friendly name describing the input expression,
+    :: WhitespaceControl
+    -- ^ Control if comments are considered whitespace
+    -> String -- ^ User-friendly name describing the input expression,
               --   used in parsing error messages
     -> Text   -- ^ Input expression to parse
     -> Either ParseError (Header, Expr Src Import)
-exprAndHeaderFromText delta text = case result of
+exprAndHeaderFromText commentControl delta text = case result of
     Left errInfo   -> Left (ParseError { unwrap = errInfo, input = text })
-    Right (txt, r) -> Right (createHeader txt, r)
+    Right (mComment, r) -> Right (createHeader mComment, r)
   where
     parser = do
-        (bytes, _) <- Text.Megaparsec.match whitespace
+        headerComment <- commentOrWhitespace
         r <- expr
         Text.Megaparsec.eof
-        return (bytes, r)
+        return (headerComment, r)
 
-    result = Text.Megaparsec.parse (unParser parser) delta text
+    result = runParser parser commentControl delta text

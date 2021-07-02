@@ -48,6 +48,7 @@ Executable openapi-to-dhall
     parser-combinators                             , 
     prettyprinter                                  ,
     sort                                           ,
+    transformers                                   ,
     text                                           ,
     vector
   Default-Language: Haskell2010

@@ -19,7 +19,7 @@ import Data.Functor        (void)
 import Data.List.NonEmpty  (NonEmpty (..), (<|))
 import Data.Text           (Text)
 import Dhall.Docs.Util
-import Dhall.Parser        (Parser (..))
+import Dhall.Parser        (Parser (..), runParser, WhitespaceControl (UnsupportedCommentsPermitted))
 import Text.Megaparsec     (SourcePos, (<?>))
 
 import qualified Data.Either
@@ -93,7 +93,7 @@ lineCommentParser = do
 
     singleLine = do
       sourcePos <- Text.Megaparsec.getSourcePos
-      commentLine <- Token.lineComment
+      (_, commentLine) <- Token.lineComment
       whitespace
       pure (sourcePos, commentLine)
 
@@ -108,7 +108,7 @@ whitespace = Text.Megaparsec.skipMany (Text.Megaparsec.choice
 
 blockCommentParser :: Parser (DhallComment 'RawComment)
 blockCommentParser = do
-    c <- Token.blockComment
+    (_, c) <- Token.blockComment
     whitespace
     pure $ BlockComment c
 
@@ -126,7 +126,7 @@ parseComments delta text = case result of
         Text.Megaparsec.eof
         pure $ concatMap NonEmpty.toList comments
 
-    result = Text.Megaparsec.parse (unParser parser) delta text
+    result = runParser parser UnsupportedCommentsPermitted delta text
 
 data CommentParseError
     = MissingNewlineOnBlockComment

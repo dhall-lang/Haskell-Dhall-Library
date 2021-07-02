@@ -55,6 +55,11 @@ module Dhall.Syntax (
     , renote
     , shallowDenote
 
+    -- ** Handling comments
+    , MultiComment(..)
+    , Comment(..)
+    , CommentType(..)
+
     -- * 'Import'
     , Directory(..)
     , File(..)
@@ -188,6 +193,31 @@ instance IsString Var where
 instance Pretty Var where
     pretty = Pretty.unAnnotate . prettyVar
 
+-- | Keep track of potential multiple comments as part of Dhall syntax. This is
+-- useful for source preserving transformations such as /format/.
+newtype MultiComment = MultiComment { getMultiComment :: NonEmpty Comment }
+  deriving stock (Data, Generic, Show, Lift)
+  deriving newtype (Eq, Ord, Semigroup)
+  deriving anyclass NFData
+
+-- | A comment starting with @|@ is a Doc comment, in some places in the AST
+-- @dhall-docs@ will be able to use such a comment to render documentation for
+-- the associated expression/declaration.
+data CommentType = DocComment | RawComment
+  deriving stock (Eq, Ord, Data, Generic, Show, Lift)
+  deriving anyclass NFData
+
+-- | Keep track of a comment as part of Dhall syntax. This is useful for source
+-- preserving transformations such as /format/.
+data Comment
+  = LineComment CommentType (NonEmpty Text)
+  -- ^ Corresponds to possibly multiple consecutive lines of single line comments:
+  -- @--<text>$@ where @<text>@ does not contain newline characters
+  | BlockComment CommentType Text
+  -- ^ Corresponds to a multi line comment: @{-<text>-}@ where <text> can
+  -- contain newline characters
+  deriving (Data, Generic, Eq, Ord, Show, Lift, NFData)
+
 -- | Record the binding part of a @let@ expression.
 --
 -- For example,
@@ -196,33 +226,35 @@ instance Pretty Var where
 --
 -- … will be instantiated as follows:
 --
--- * @bindingSrc0@ corresponds to the @A@ comment.
+-- * @bindingComment0@ corresponds to the @A@ comment.
 -- * @variable@ is @"x"@
--- * @bindingSrc1@ corresponds to the @B@ comment.
+-- * @variableSrc@ corresponds to the source span for the variable @"x"@
+-- * @bindingComment1@ corresponds to the @B@ comment.
 -- * @annotation@ is 'Just' a pair, corresponding to the @C@ comment and @Bool@.
--- * @bindingSrc2@ corresponds to the @D@ comment.
+-- * @bindingComment2@ corresponds to the @D@ comment.
 -- * @value@ corresponds to @True@.
 data Binding s a = Binding
-    { bindingSrc0 :: Maybe s
-    , variable    :: Text
-    , bindingSrc1 :: Maybe s
-    , annotation  :: Maybe (Maybe s, Expr s a)
-    , bindingSrc2 :: Maybe s
-    , value       :: Expr s a
+    { bindingComment0 :: Maybe MultiComment
+    , variable        :: Text
+    , variableSrc     :: Maybe s
+    , bindingComment1 :: Maybe MultiComment
+    , annotation      :: Maybe (Maybe MultiComment, Expr s a)
+    , bindingComment2 :: Maybe MultiComment
+    , value           :: Expr s a
     } deriving (Data, Eq, Foldable, Functor, Generic, Lift, NFData, Ord, Show, Traversable)
 
 instance Bifunctor Binding where
-    first k (Binding src0 a src1 b src2 c) =
-        Binding (fmap k src0) a (fmap k src1) (fmap adapt0 b) (fmap k src2) (first k c)
+    first k (Binding comment0 a aSrc comment1 b comment2 c) =
+        Binding comment0 a (fmap k aSrc) comment1 (fmap adapt0 b) comment2 (first k c)
       where
-        adapt0 (src3, d) = (fmap k src3, first k d)
+        adapt0 (comment3, d) = (comment3, first k d)
 
     second = fmap
 
 {-| Construct a 'Binding' with no source information and no type annotation.
 -}
 makeBinding :: Text -> Expr s a -> Binding s a
-makeBinding name = Binding Nothing name Nothing Nothing Nothing
+makeBinding name = Binding Nothing name Nothing Nothing Nothing Nothing
 
 -- | This wrapper around 'Prelude.Double' exists for its 'Eq' instance which is
 -- defined via the binary encoding of Dhall @Double@s.
@@ -303,25 +335,27 @@ instance Bifunctor PreferAnnotation where
 --
 -- will be instantiated as follows:
 --
--- * @recordFieldSrc0@ corresponds to the @A@ comment.
+-- * @recordFieldComment0@ corresponds to the @A@ comment.
+-- * @recordFieldKeySrc@ corresponds to the source span for @"x"@.
 -- * @recordFieldValue@ is @"T"@
--- * @recordFieldSrc1@ corresponds to the @B@ comment.
--- * @recordFieldSrc2@ corresponds to the @C@ comment.
+-- * @recordFieldComment1@ corresponds to the @B@ comment.
+-- * @recordFieldComment2@ corresponds to the @C@ comment.
 --
 -- Although the @A@ comment isn't annotating the @"T"@ Record Field,
 -- this is the best place to keep these comments.
 --
--- Note that @recordFieldSrc2@ is always 'Nothing' when the 'RecordField' is for
+-- Note that @recordFieldComment2@ is always 'Nothing' when the 'RecordField' is for
 -- a punned entry, because there is no @=@ sign. For example,
 --
 -- > { {- A -} x {- B -} }
 --
 -- will be instantiated as follows:
 --
--- * @recordFieldSrc0@ corresponds to the @A@ comment.
+-- * @recordFieldComment0@ corresponds to the @A@ comment.
+-- * @recordFieldKeySrc@ corresponds to the source span for @"x"@.
 -- * @recordFieldValue@ corresponds to @(Var "x")@
--- * @recordFieldSrc1@ corresponds to the @B@ comment.
--- * @recordFieldSrc2@ will be 'Nothing'
+-- * @recordFieldComment1@ corresponds to the @B@ comment.
+-- * @recordFieldComment2@ will be 'Nothing'
 --
 -- The labels involved in a record using dot-syntax like in this example:
 --
@@ -329,37 +363,40 @@ instance Bifunctor PreferAnnotation where
 --
 -- will be instantiated as follows:
 --
--- * For both the @a@ and @b@ field, @recordfieldSrc2@ is 'Nothing'
+-- * For both the @a@ and @b@ field, @recordFieldComment2@ is 'Nothing'
 -- * For the @a@ field:
---   * @recordFieldSrc0@ corresponds to the @A@ comment
---   * @recordFieldSrc1@ corresponds to the @B@ comment
+--   * @recordFieldComment0@ corresponds to the @A@ comment
+--   * @recordFieldKeySrc@ corresponds to the source span for @"a"@.
+--   * @recordFieldComment1@ corresponds to the @B@ comment
 -- * For the @b@ field:
---   * @recordFieldSrc0@ corresponds to the @C@ comment
---   * @recordFieldSrc1@ corresponds to the @D@ comment
+--   * @recordFieldComment0@ corresponds to the @C@ comment
+--   * @recordFieldKeySrc@ corresponds to the source span for @"b"@.
+--   * @recordFieldComment1@ corresponds to the @D@ comment
 -- * For the @c@ field:
---   * @recordFieldSrc0@ corresponds to the @E@ comment
---   * @recordFieldSrc1@ corresponds to the @F@ comment
---   * @recordFieldSrc2@ corresponds to the @G@ comment
+--   * @recordFieldComment0@ corresponds to the @E@ comment
+--   * @recordFieldKeySrc@ corresponds to the source span for @"c"@.
+--   * @recordFieldComment1@ corresponds to the @F@ comment
+--   * @recordFieldComment2@ corresponds to the @G@ comment
 --
 -- That is, for every label except the last one the semantics of
--- @recordFieldSrc0@ and @recordFieldSrc1@ are the same from a regular record
--- label but @recordFieldSrc2@ is always 'Nothing'. For the last keyword, all
--- srcs are 'Just'
+-- @recordFieldComment0@ and @recordFieldComment1@ are the same from a regular record
+-- label but @recordFieldComment2@ is always 'Nothing'.
 data RecordField s a = RecordField
-    { recordFieldSrc0  :: Maybe s
-    , recordFieldValue :: Expr s a
-    , recordFieldSrc1  :: Maybe s
-    , recordFieldSrc2  :: Maybe s
+    { recordFieldComment0 :: Maybe MultiComment
+    , recordFieldKeySrc   :: Maybe s
+    , recordFieldValue    :: Expr s a
+    , recordFieldComment1 :: Maybe MultiComment
+    , recordFieldComment2 :: Maybe MultiComment
     } deriving (Data, Eq, Foldable, Functor, Generic, Lift, NFData, Ord, Show, Traversable)
 
 -- | Construct a 'RecordField' with no src information
 makeRecordField :: Expr s a -> RecordField s a
-makeRecordField e = RecordField Nothing e Nothing Nothing
+makeRecordField e = RecordField Nothing Nothing e Nothing Nothing
 
 
 instance Bifunctor RecordField where
-    first k (RecordField s0 value s1 s2) =
-        RecordField (k <$> s0) (first k value) (k <$> s1) (k <$> s2)
+    first k (RecordField c0 s value c1 c2) =
+        RecordField c0 (k <$> s) (first k value) c1 c2
     second = fmap
 
 {-| Record the label of a function or a function-type expression
@@ -369,27 +406,29 @@ For example,
 > λ({- A -} a {- B -} : {- C -} T) -> e
 
 will be instantiated as follows:
-* @functionBindingSrc0@ corresponds to the @A@ comment
+* @functionBindingComment0@ corresponds to the @A@ comment
 * @functionBindingVariable@ is @a@
-* @functionBindingSrc1@ corresponds to the @B@ comment
-* @functionBindingSrc2@ corresponds to the @C@ comment
+* @functionBindingVariableSrc@ corresponds to the source span for @"a"@
+* @functionBindingComment1@ corresponds to the @B@ comment
+* @functionBindingComment2@ corresponds to the @C@ comment
 * @functionBindingAnnotation@ is @T@
 -}
 data FunctionBinding s a = FunctionBinding
-    { functionBindingSrc0 :: Maybe s
+    { functionBindingComment0 :: Maybe MultiComment
     , functionBindingVariable :: Text
-    , functionBindingSrc1 :: Maybe s
-    , functionBindingSrc2 :: Maybe s
+    , functionBindingVariableSrc :: Maybe s
+    , functionBindingComment1 :: Maybe MultiComment
+    , functionBindingComment2 :: Maybe MultiComment
     , functionBindingAnnotation :: Expr s a
     } deriving (Data, Eq, Foldable, Functor, Generic, Lift, NFData, Ord, Show, Traversable)
 
 -- | Smart constructor for 'FunctionBinding' with no src information
 makeFunctionBinding :: Text -> Expr s a -> FunctionBinding s a
-makeFunctionBinding l t = FunctionBinding Nothing l Nothing Nothing t
+makeFunctionBinding l t = FunctionBinding Nothing l Nothing Nothing Nothing t
 
 instance Bifunctor FunctionBinding where
-    first k (FunctionBinding src0 label src1 src2 type_) =
-        FunctionBinding (k <$> src0) label (k <$> src1) (k <$> src2) (first k type_)
+    first k (FunctionBinding c0 label s c1 c2 type_) =
+        FunctionBinding c0 label (k <$> s) c1 c2 (first k type_)
 
     second = fmap
 
@@ -397,28 +436,24 @@ instance Bifunctor FunctionBinding where
 --
 -- For example,
 --
--- > e . {- A -} x {- B -}
+-- > e {- A -} . {- B -} x
 --
 -- … will be instantiated as follows:
 --
--- * @fieldSelectionSrc0@ corresponds to the @A@ comment
+-- * @fieldSelectionComment0@ corresponds to the @A@ comment
+-- * @fieldSelectionComment1@ corresponds to the @B@ comment
 -- * @fieldSelectionLabel@ corresponds to @x@
--- * @fieldSelectionSrc1@ corresponds to the @B@ comment
---
--- Given our limitation that not all expressions recover their whitespaces, the
--- purpose of @fieldSelectionSrc1@ is to save the 'Text.Megaparsec.SourcePos'
--- where the @fieldSelectionLabel@ ends, but we /still/ use a 'Maybe Src'
--- (@s = 'Src'@) to be consistent with similar data types such as 'Binding', for
--- example.
+-- * @fieldSelectionLabelSrc@ corresponds to the source span for @"x"@
 data FieldSelection s = FieldSelection
-    { fieldSelectionSrc0 :: Maybe s
+    { fieldSelectionComment0 :: Maybe MultiComment
+    , fieldSelectionComment1 :: Maybe MultiComment
     , fieldSelectionLabel :: !Text
-    , fieldSelectionSrc1 :: Maybe s
+    , fieldSelectionLabelSrc :: Maybe s
     } deriving (Data, Eq, Foldable, Functor, Generic, Lift, NFData, Ord, Show, Traversable)
 
 -- | Smart constructor for 'FieldSelection' with no src information
 makeFieldSelection :: Text -> FieldSelection s
-makeFieldSelection t = FieldSelection Nothing t Nothing
+makeFieldSelection t = FieldSelection Nothing Nothing t Nothing
 
 {-| Syntax tree for expressions
 
@@ -447,8 +482,8 @@ data Expr s a
     | Pi  (Maybe CharacterSet) Text (Expr s a) (Expr s a)
     -- | > App f a                                  ~  f a
     | App (Expr s a) (Expr s a)
-    -- | > Let (Binding _ x _  Nothing  _ r) e      ~  let x     = r in e
-    --   > Let (Binding _ x _ (Just t ) _ r) e      ~  let x : t = r in e
+    -- | > Let (Binding _ x _ _  Nothing  _ r) e      ~  let x     = r in e
+    --   > Let (Binding _ x _ _ (Just t ) _ r) e      ~  let x : t = r in e
     --
     -- The difference between
     --
@@ -674,14 +709,14 @@ instance Monad (Expr s) where
         Field a b   -> Field (a >>= k) b
         _ -> Lens.over unsafeSubExpressions (>>= k) expression
       where
-        bindRecordKeyValues (RecordField s0 e s1 s2) =
-            RecordField s0 (e >>= k) s1 s2
+        bindRecordKeyValues (RecordField c0 s e c1 c2) =
+            RecordField c0 s (e >>= k) c1 c2
 
-        adaptBinding (Binding src0 c src1 d src2 e) =
-            Binding src0 c src1 (fmap adaptBindingAnnotation d) src2 (e >>= k)
+        adaptBinding (Binding comment0 c src comment1 d comment2 e) =
+            Binding comment0 c src comment1 (fmap adaptBindingAnnotation d) comment2 (e >>= k)
 
-        adaptFunctionBinding (FunctionBinding src0 label src1 src2 type_) =
-            FunctionBinding src0 label src1 src2 (type_ >>= k)
+        adaptFunctionBinding (FunctionBinding c0 label s c1 c2 type_) =
+            FunctionBinding c0 label s c1 c2 (type_ >>= k)
 
         adaptBindingAnnotation (src3, f) = (src3, f >>= k)
 
@@ -868,13 +903,14 @@ bindingExprs
   :: (Applicative f)
   => (Expr s a -> f (Expr s b))
   -> Binding s a -> f (Binding s b)
-bindingExprs f (Binding s0 n s1 t s2 v) =
+bindingExprs f (Binding c0 n s c1 t c2 v) =
   Binding
-    <$> pure s0
+    <$> pure c0
     <*> pure n
-    <*> pure s1
+    <*> pure s
+    <*> pure c1
     <*> traverse (traverse f) t
-    <*> pure s2
+    <*> pure c2
     <*> f v
 {-# INLINABLE bindingExprs #-}
 
@@ -884,12 +920,13 @@ recordFieldExprs
     :: Applicative f
     => (Expr s a -> f (Expr s b))
     -> RecordField s a -> f (RecordField s b)
-recordFieldExprs f (RecordField s0 e s1 s2) =
+recordFieldExprs f (RecordField c0 s e c1 c2) =
     RecordField
-        <$> pure s0
+        <$> pure c0
+        <*> pure s
         <*> f e
-        <*> pure s1
-        <*> pure s2
+        <*> pure c1
+        <*> pure c2
 {-# INLINABLE recordFieldExprs #-}
 
 {-| Traverse over the immediate 'Expr' children in a 'FunctionBinding'.
@@ -898,12 +935,13 @@ functionBindingExprs
     :: Applicative f
     => (Expr s a -> f (Expr s b))
     -> FunctionBinding s a -> f (FunctionBinding s b)
-functionBindingExprs f (FunctionBinding s0 label s1 s2 type_) =
+functionBindingExprs f (FunctionBinding c0 label s c1 c2 type_) =
     FunctionBinding
-        <$> pure s0
+        <$> pure c0
         <*> pure label
-        <*> pure s1
-        <*> pure s2
+        <*> pure s
+        <*> pure c1
+        <*> pure c2
         <*> f type_
 {-# INLINABLE functionBindingExprs #-}
 
@@ -1132,7 +1170,7 @@ pathCharacter c =
 
 -- | Remove all `Note` constructors from an `Expr` (i.e. de-`Note`)
 --
--- This also remove CharacterSet annotations.
+-- This also remove CharacterSet annotations as well as Comments
 denote :: Expr s a -> Expr t a
 denote = \case
     Note _ b -> denote b
@@ -1145,18 +1183,18 @@ denote = \case
     RecordLit a -> RecordLit $ denoteRecordField <$> a
     Lam _ a b -> Lam Nothing (denoteFunctionBinding a) (denote b)
     Pi _ t a b -> Pi Nothing t (denote a) (denote b)
-    Field a (FieldSelection _ b _) -> Field (denote a) (FieldSelection Nothing b Nothing)
+    Field a (FieldSelection _ _ b _) -> Field (denote a) (FieldSelection Nothing Nothing b Nothing)
     Equivalent _ a b -> Equivalent Nothing (denote a) (denote b)
     expression -> Lens.over unsafeSubExpressions denote expression
   where
-    denoteRecordField (RecordField _ e _ _) = RecordField Nothing (denote e) Nothing Nothing
-    denoteBinding (Binding _ c _ d _ e) =
-        Binding Nothing c Nothing (fmap denoteBindingAnnotation d) Nothing (denote e)
+    denoteRecordField (RecordField _ _ e _ _) = RecordField Nothing Nothing (denote e) Nothing Nothing
+    denoteBinding (Binding _ c _ _ d _ e) =
+        Binding Nothing c Nothing Nothing (fmap denoteBindingAnnotation d) Nothing (denote e)
 
     denoteBindingAnnotation (_, f) = (Nothing, denote f)
 
-    denoteFunctionBinding (FunctionBinding _ l _ _ t) =
-        FunctionBinding Nothing l Nothing Nothing (denote t)
+    denoteFunctionBinding (FunctionBinding _ l _ _ _ t) =
+        FunctionBinding Nothing l Nothing Nothing Nothing (denote t)
 
 -- | The \"opposite\" of `denote`, like @first absurd@ but faster
 renote :: Expr Void a -> Expr s a
@@ -1396,8 +1434,8 @@ shift :: Int -> Var -> Expr s a -> Expr s a
 shift d (V x n) (Var (V x' n')) = Var (V x' n'')
   where
     n'' = if x == x' && n <= n' then n' + d else n'
-shift d (V x n) (Lam cs (FunctionBinding src0 x' src1 src2 _A) b) =
-    Lam cs (FunctionBinding src0 x' src1 src2 _A') b'
+shift d (V x n) (Lam cs (FunctionBinding c0 x' s c1 c2 _A) b) =
+    Lam cs (FunctionBinding c0 x' s c1 c2 _A') b'
   where
     _A' = shift d (V x n ) _A
     b'  = shift d (V x n') b
@@ -1409,8 +1447,8 @@ shift d (V x n) (Pi cs x' _A _B) = Pi cs x' _A' _B'
     _B' = shift d (V x n') _B
       where
         n' = if x == x' then n + 1 else n
-shift d (V x n) (Let (Binding src0 f src1 mt src2 r) e) =
-    Let (Binding src0 f src1 mt' src2 r') e'
+shift d (V x n) (Let (Binding comment0 f src comment1 mt comment2 r) e) =
+    Let (Binding comment0 f src comment1 mt' comment2 r') e'
   where
     e' = shift d (V x n') e
       where
@@ -1438,7 +1476,7 @@ desugarWith = Optics.rewriteOf subExpressions rewrite
                 (makeBinding "_" record)
                 (Prefer mempty (PreferFromWith e) "_"
                     (RecordLit
-                        [ (key0, makeRecordField $ With (Field "_" (FieldSelection Nothing key0 Nothing)) (key1 :| keys) (shift 1 "_" value)) ]
+                        [ (key0, makeRecordField $ With (Field "_" (FieldSelection Nothing Nothing key0 Nothing)) (key1 :| keys) (shift 1 "_" value)) ]
                     )
                 )
             )

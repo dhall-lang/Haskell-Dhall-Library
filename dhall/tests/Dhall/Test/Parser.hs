@@ -83,31 +83,34 @@ notesInLetInLet =
                 (Note code
                   (Let
                     (Binding
-                      (Just " ")
-                      "x"
-                      (Just " ")
                       Nothing
-                      (Just " ")
+                      "x"
+                      (Just "x")
+                      Nothing
+                      Nothing
+                      Nothing
                       (Note "0 " (Note "0" (NaturalLit 0)))
                     )
                     -- This 'Let' isn't wrapped in a 'Note'!
                     (Let
                       (Binding
-                        (Just " ")
-                        "y"
-                        (Just " ")
                         Nothing
-                        (Just " ")
+                        "y"
+                        (Just "y")
+                        Nothing
+                        Nothing
+                        Nothing
                         (Note "1 " (Note "1" (NaturalLit 1)))
                       )
                       (Note "let z = 2 in x"
                         (Let
                           (Binding
-                            (Just " ")
-                            "z"
-                            (Just " ")
                             Nothing
-                            (Just " ")
+                            "z"
+                            (Just "z")
+                            Nothing
+                            Nothing
+                            Nothing
                             (Note "2 " (Note "2" (NaturalLit 2)))
                           )
                           (Note "x" (Var (V "x" 0)))

@@ -62,6 +62,7 @@ import Dhall.Core
 import Dhall.Util
     ( Censor (..)
     , CheckFailed (..)
+    , WhitespaceControl (..)
     , Header (..)
     , Input (..)
     , Output (..)
@@ -118,6 +119,7 @@ data Options = Options
     , explain            :: Bool
     , plain              :: Bool
     , chosenCharacterSet :: Maybe CharacterSet
+    , commentControl     :: WhitespaceControl
     , censor             :: Censor
     }
 
@@ -197,6 +199,7 @@ parseOptions =
     <*> switch "explain" "Explain error messages in more detail"
     <*> switch "plain" "Disable syntax highlighting"
     <*> parseCharacterSet
+    <*> parseWhitespaceControl
     <*> parseCensor
   where
     switch name description =
@@ -204,6 +207,13 @@ parseOptions =
             (   Options.Applicative.long name
             <>  Options.Applicative.help description
             )
+
+    parseWhitespaceControl = fmap f $ switch
+        "discard-unsupported-comments"
+        "Discard comments that cannot be auto-formatted instead of failing (but continue to submit issues for any comments the auto-formatter rejects)"
+      where
+        f True  = UnsupportedCommentsPermitted
+        f False = UnsupportedCommentsForbidden
 
     parseCensor = fmap f (switch "censor" "Hide source code in error messages")
       where
@@ -816,7 +826,7 @@ command (Options {..}) = do
 
             let intent = if cache then Cache else Secure
 
-            Dhall.Freeze.freeze outputMode transitivity inputs scope intent chosenCharacterSet censor
+            Dhall.Freeze.freeze outputMode transitivity inputs scope intent chosenCharacterSet commentControl censor
 
         Hash {..} -> do
             expression <- getExpression file
@@ -846,7 +856,8 @@ command (Options {..}) = do
                         StandardInput  -> "."
                         InputFile file -> System.FilePath.takeDirectory file
 
-                let status = Dhall.Import.emptyStatus directory
+                let status = (Dhall.Import.emptyStatus directory)
+                        { Dhall.Import._commentControl = commentControl }
 
                 (inputName, originalText, transitivity) <- case input of
                     InputFile file -> do
@@ -859,7 +870,7 @@ command (Options {..}) = do
                         return ("(input)", text, NonTransitive)
 
                 (Header header, parsedExpression) <-
-                    Dhall.Util.getExpressionAndHeaderFromStdinText censor inputName originalText
+                    Dhall.Util.getExpressionAndHeaderFromStdinText commentControl censor inputName originalText
 
                 let characterSet = fromMaybe (detectCharacterSet parsedExpression) chosenCharacterSet
 

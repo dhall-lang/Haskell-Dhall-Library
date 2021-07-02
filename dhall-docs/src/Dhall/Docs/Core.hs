@@ -47,6 +47,7 @@ import Dhall.Docs.Store
 import Dhall.Parser
     ( Header (..)
     , ParseError (..)
+    , WhitespaceControl (UnsupportedCommentsPermitted)
     , exprAndHeaderFromText
     )
 import Dhall.Pretty               (CharacterSet)
@@ -181,7 +182,7 @@ getAllDhallFiles = fmap Maybe.catMaybes . mapM toDhallFile . foldr validFiles []
 
     toDhallFile :: (Path Rel File, Text) -> GeneratedDocs (Maybe DhallFile)
     toDhallFile (relFile, contents) =
-        case exprAndHeaderFromText (Path.fromRelFile relFile) contents of
+        case exprAndHeaderFromText UnsupportedCommentsPermitted (Path.fromRelFile relFile) contents of
             Right (Header header, expr) -> do
                 let denoted = denote expr :: Expr Void Import
 
@@ -222,7 +223,7 @@ getAllDhallFiles = fmap Maybe.catMaybes . mapM toDhallFile . foldr validFiles []
 
         fromLetBindingAnnotation = do
             V name index <- maybeNameInLet expr
-            (Binding _ _ _ (Just (_, exprType)) _ _) <-
+            (Binding _ _ _ _ (Just (_, exprType)) _ _) <-
                 getLetBindingWithIndex index $ getLetBindingsWithName name
             return exprType
 
@@ -252,7 +253,7 @@ getAllDhallFiles = fmap Maybe.catMaybes . mapM toDhallFile . foldr validFiles []
         getLetBindingsWithName :: Text -> [Binding Void Import]
         getLetBindingsWithName name = filter bindName $ reverse $ bindings expr
           where
-            bindName (Binding _ x _ _ _ _) = x == name
+            bindName (Binding _ x _ _ _ _ _) = x == name
 
 
         getLetBindingWithIndex :: Int -> [Binding Void Import] -> Maybe (Binding Void Import)

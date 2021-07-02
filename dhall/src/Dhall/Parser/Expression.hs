@@ -140,11 +140,11 @@ parsers embedded = Parsers {..}
             cs <- _lambda
             whitespace
             _openParens
-            src0 <- src whitespace
-            a <- label
-            src1 <- src whitespace
+            c0 <- commentOrWhitespace
+            (s, a) <- srcAnd label
+            c1 <- commentOrWhitespace
             _colon
-            src2 <- src nonemptyWhitespace
+            c2 <- commentOrNonEmptyWhitespace
             b <- expression
             whitespace
             _closeParens
@@ -152,7 +152,7 @@ parsers embedded = Parsers {..}
             cs' <- _arrow
             whitespace
             c <- expression
-            return (Lam (Just (cs <> cs')) (FunctionBinding (Just src0) a (Just src1) (Just src2) b) c)
+            return (Lam (Just (cs <> cs')) (FunctionBinding c0 a (Just s) c1 c2 b) c)
 
         alternative1 = do
             try (_if *> nonemptyWhitespace)
@@ -167,32 +167,32 @@ parsers embedded = Parsers {..}
 
         alternative2 = do
             let binding = do
-                    src0 <- try (_let *> src nonemptyWhitespace)
+                    comment0 <- try (_let *> commentOrNonEmptyWhitespace)
 
-                    c <- label
+                    (s, c) <- srcAnd label
 
-                    src1 <- src whitespace
+                    comment1 <- commentOrWhitespace
 
                     d <- optional (do
                         _colon
 
-                        src2 <- src nonemptyWhitespace
+                        comment3 <- commentOrNonEmptyWhitespace
 
                         e <- expression
 
                         whitespace
 
-                        return (Just src2, e) )
+                        return (comment3, e) )
 
                     _equal
 
-                    src3 <- src whitespace
+                    comment2 <- commentOrWhitespace
 
                     f <- expression
 
                     whitespace
 
-                    return (Binding (Just src0) c (Just src1) d (Just src3) f)
+                    return (Binding comment0 c (Just s) comment1 d comment2 f)
 
             as <- NonEmpty.some1 binding
 
@@ -453,19 +453,16 @@ parsers embedded = Parsers {..}
             let projectByExpression xs e = Project e (Right xs)
 
             let alternatives = do
-                    src0 <- src whitespace
+                    c0 <- commentOrWhitespace
+
+                    _dot
 
                     let fieldSelection = do
-                            l <- anyLabel
+                            c1 <- commentOrWhitespace
 
-                            pos <- Text.Megaparsec.getSourcePos
+                            (s, l) <- srcAnd anyLabel
 
-                            -- FIXME: Suffix whitespace can't be parsed given our limitation
-                            -- about whitespace treatment, but for @dhall-docs@ this
-                            -- is enough
-                            let src1 = Src pos pos ""
-
-                            return (FieldSelection (Just src0) l (Just src1))
+                            return (FieldSelection c0 c1 l (Just s))
 
                     let result =
                                 fmap field               fieldSelection
@@ -474,7 +471,7 @@ parsers embedded = Parsers {..}
 
                     result
 
-            b <- Text.Megaparsec.many (try (whitespace *> _dot *> alternatives))
+            b <- Text.Megaparsec.many (try alternatives)
 
             return (foldl' (\e k -> k e) a b) )
 
@@ -514,17 +511,19 @@ parsers embedded = Parsers {..}
             alternative04 = (do
                 _openBrace
 
-                src0 <- src whitespace
+                comment0 <- commentOrWhitespace
                 mComma <- optional _comma
 
-                -- `src1` corresponds to the prefix whitespace of the first key-value
+                -- `comment1` corresponds to the prefix whitespace of the first key-value
                 -- pair. This is done to avoid using `try` to recover the consumed
                 -- whitespace when the comma is not consumed
-                src1 <- case mComma of
-                    Nothing -> return src0
-                    Just _ -> src whitespace
+                comment1 <- case mComma of
+                    Nothing -> return comment0
+                    Just _ -> do
+                      c <- commentOrWhitespace
+                      pure (comment0 <> c)
 
-                a <- recordTypeOrLiteral src1
+                a <- recordTypeOrLiteral comment1
 
                 _closeBrace
 
@@ -789,10 +788,10 @@ parsers embedded = Parsers {..}
             literal <- doubleQuotedLiteral <|> singleQuoteLiteral
             return (TextLit literal) ) <?> "literal"
 
-    recordTypeOrLiteral firstSrc0 =
+    recordTypeOrLiteral firstComment0 =
             choice
                 [ emptyRecordLiteral
-                , nonEmptyRecordTypeOrLiteral firstSrc0
+                , nonEmptyRecordTypeOrLiteral firstComment0
                 , emptyRecordType
                 ]
 
@@ -806,85 +805,86 @@ parsers embedded = Parsers {..}
 
     emptyRecordType = return (Record mempty)
 
-    nonEmptyRecordTypeOrLiteral firstSrc0 = do
+    nonEmptyRecordTypeOrLiteral firstComment0 = do
             let nonEmptyRecordType = do
-                    (firstKeySrc1, a) <- try $ do
-                        a <- anyLabelOrSome
-                        s <- src whitespace
+                    (firstKeyComment1, a, s) <- try $ do
+                        (s, a) <- srcAnd anyLabelOrSome
+                        c <- commentOrWhitespace
                         _colon
-                        return (s, a)
+                        return (c, a, s)
 
-                    firstKeySrc2 <- src nonemptyWhitespace
+                    firstKeyComment2 <- commentOrNonEmptyWhitespace
 
                     b <- expression
 
                     e <- Text.Megaparsec.many $ do
-                        (src0', c) <- try $ do
+                        (comment0', c, s') <- try $ do
                             _comma
-                            src0' <- src whitespace
-                            c <- anyLabelOrSome
-                            return (src0', c)
+                            comment0' <- commentOrWhitespace
+                            (s', c) <- srcAnd anyLabelOrSome
+                            return (comment0', c, s')
 
-                        src1 <- src whitespace
+                        comment1 <- commentOrWhitespace
 
                         _colon
 
-                        src2 <- src nonemptyWhitespace
+                        comment2 <- commentOrNonEmptyWhitespace
 
                         d <- expression
 
                         whitespace
 
-                        return (c, RecordField (Just src0') d (Just src1) (Just src2))
+                        return (c, RecordField comment0' (Just s') d comment1 comment2)
 
                     _ <- optional (whitespace *> _comma)
                     whitespace
 
-                    m <- toMap ((a, RecordField (Just firstSrc0) b (Just firstKeySrc1) (Just firstKeySrc2)) : e)
+                    m <- toMap ((a, RecordField firstComment0 (Just s) b firstKeyComment1 firstKeyComment2) : e)
 
                     return (Record m)
 
-            let keysValue maybeSrc = do
-                    firstSrc0' <- case maybeSrc of
-                        Just src0 -> return src0
-                        Nothing -> src whitespace
-                    firstLabel <- anyLabelOrSome
-                    firstSrc1 <- src whitespace
+            let keysValue maybeComment = do
+                    firstComment0' <- do
+                        c <- commentOrWhitespace
+                        pure (maybeComment <> c)
+
+                    (s, firstLabel) <- srcAnd anyLabelOrSome
+                    firstComment1 <- commentOrWhitespace
 
                     let parseLabelWithWhsp = try $ do
                             _dot
-                            src0 <- src whitespace
-                            l <- anyLabelOrSome
-                            src1 <- src whitespace
-                            return (src0, l, src1)
+                            comment0 <- commentOrWhitespace
+                            (s', l) <- srcAnd anyLabelOrSome
+                            comment1 <- commentOrWhitespace
+                            return (comment0, l, s', comment1)
 
                     restKeys <- Combinators.many parseLabelWithWhsp
-                    let keys = (firstSrc0', firstLabel, firstSrc1) :| restKeys
+                    let keys = (firstComment0', firstLabel, s, firstComment1) :| restKeys
 
                     let normalRecordEntry = do
                             try _equal
 
-                            lastSrc2 <- src whitespace
+                            lastComment2 <- commentOrWhitespace
 
                             value <- expression
 
-                            let cons (s0, key, s1) (key', values) =
-                                    (key, RecordField (Just s0) (RecordLit [ (key', values) ]) (Just s1) Nothing)
+                            let cons (c0, key, s', c1) (key', values) =
+                                    (key, RecordField c0 (Just s') (RecordLit [ (key', values) ]) c1 Nothing)
 
-                            let (lastSrc0, lastLabel, lastSrc1) = NonEmpty.last keys
-                            let nil = (lastLabel, RecordField (Just lastSrc0) value (Just lastSrc1) (Just lastSrc2))
+                            let (lastComment0, lastLabel, lastS, lastComment1) = NonEmpty.last keys
+                            let nil = (lastLabel, RecordField lastComment0 (Just lastS) value lastComment1 lastComment2)
 
                             return (foldr cons nil (NonEmpty.init keys))
 
                     let punnedEntry =
                             case keys of
-                                (s0, x, s1) :| [] -> return (x, RecordField (Just s0) (Var (V x 0)) (Just s1) Nothing)
+                                (c0, x, s', c1) :| [] -> return (x, RecordField c0 (Just s') (Var (V x 0)) c1 Nothing)
                                 _       -> empty
 
                     (normalRecordEntry <|> punnedEntry) <* whitespace
 
             let nonEmptyRecordLiteral = do
-                    a <- keysValue (Just firstSrc0)
+                    a <- keysValue firstComment0
 
                     as <- many (try (_comma *> keysValue Nothing))
 
@@ -962,6 +962,42 @@ parsers embedded = Parsers {..}
                     return (ListLit Nothing mempty)
 
             nonEmptyListLiteral <|> emptyListLiteral) <?> "literal"
+
+-- | Parse a single comment
+comment :: Parser Comment
+comment = lineComments <|> uncurry BlockComment <$> blockComment <?> "comment"
+  where
+    -- Note: using sepBy1 here instead fails consumes too much input
+    lineComments = do
+        (commentType, a) <- lineComment
+        bs <- many . try $ do
+          _ <- spaceOrTab
+          -- Require raw comment type for subsequent comment lines
+          (RawComment, l) <- lineComment
+          pure l
+
+        pure $ LineComment commentType (a :| bs)
+
+    spaceOrTab = Dhall.Parser.Combinators.takeWhile (\c -> c == ' ' || c == '\t')
+
+-- | Parse a multi comment (which contains at least one comment)
+multiComment :: Parser MultiComment
+multiComment = setWhitespaceControl UnsupportedCommentsForbidden $
+    MultiComment <$> Combinators.NonEmpty.sepEndBy1 comment whitespace
+
+-- | Parse a multi comment or whitespace
+commentOrWhitespace :: Parser (Maybe MultiComment)
+commentOrWhitespace = setWhitespaceControl UnsupportedCommentsForbidden $
+    do whitespace; optional multiComment
+
+-- | Parse a multi comment or non-empty whitespace
+commentOrNonEmptyWhitespace :: Parser (Maybe MultiComment)
+commentOrNonEmptyWhitespace = setWhitespaceControl UnsupportedCommentsForbidden $ do
+    m <- optional whitespaceChunk
+
+    case m of
+        Nothing -> Just <$> multiComment
+        Just () -> whitespace *> optional multiComment
 
 {-| Parse an environment variable import
 

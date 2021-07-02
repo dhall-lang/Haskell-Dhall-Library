@@ -39,7 +39,7 @@ freezeTest prefix =
 
         parsedInput <- Core.throws (Parser.exprFromText mempty inputText)
 
-        actualExpression <- Freeze.freezeExpression (Turtle.encodeString freezeDirectory) AllImports Cache parsedInput
+        actualExpression <- Freeze.freezeExpression (Turtle.encodeString freezeDirectory) Parser.UnsupportedCommentsPermitted AllImports Cache parsedInput
 
         let actualText = Core.pretty actualExpression <> "\n"
 

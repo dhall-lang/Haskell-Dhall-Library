@@ -32,6 +32,9 @@ module Dhall.Core (
     , FieldSelection (..)
     , makeFieldSelection
     , Expr(..)
+    , MultiComment(..)
+    , Comment(..)
+    , CommentType(..)
 
     -- * Normalization
     , alphaNormalize

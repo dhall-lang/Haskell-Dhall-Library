@@ -196,7 +196,7 @@ import Dhall.Import.Types
 
 import Dhall.Parser
     ( ParseError (..)
-    , Parser (..)
+    , runParser
     , SourcedException (..)
     , Src (..)
     )
@@ -231,7 +231,6 @@ import qualified System.Environment
 import qualified System.FilePath                             as FilePath
 import qualified System.Info
 import qualified System.IO
-import qualified Text.Megaparsec
 import qualified Text.Parser.Combinators
 import qualified Text.Parser.Token
 
@@ -642,13 +641,13 @@ loadImportWithSemisemanticCache (Chained (Import (ImportHashed _ importType) Cod
         Env env -> return $ Text.unpack env
         Missing -> throwM (MissingImports [])
 
-    let parser = unParser $ do
+    let parser = do
             Text.Parser.Token.whiteSpace
             r <- Dhall.Parser.expr
             Text.Parser.Combinators.eof
             return r
 
-    parsedImport <- case Text.Megaparsec.parse parser path text of
+    parsedImport <- case runParser parser _commentControl path text of
         Left  errInfo ->
             throwMissingImport (Imported _stack (ParseError errInfo text))
         Right expr    -> return expr

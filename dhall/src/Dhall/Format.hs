@@ -9,16 +9,19 @@ module Dhall.Format
     ( -- * Format
       Format(..)
     , format
+    , formatHeaderAndExpr
     ) where
 
 import Data.Foldable      (for_)
 import Data.List.NonEmpty (NonEmpty)
 import Data.Maybe         (fromMaybe)
+import Dhall.Core         (Expr, Import, internalError)
 import Dhall.Pretty
     ( CharacterSet
     , annToAnsiStyle
     , detectCharacterSet
     )
+import Dhall.Src          (Src)
 import Dhall.Util
     ( Censor
     , CheckFailed (..)
@@ -29,21 +32,27 @@ import Dhall.Util
     , handleMultipleChecksFailed
     )
 
+import qualified Data.Text                                 as Text
 import qualified Data.Text.IO
 import qualified Data.Text.Prettyprint.Doc                 as Pretty
 import qualified Data.Text.Prettyprint.Doc.Render.Terminal as Pretty.Terminal
 import qualified Data.Text.Prettyprint.Doc.Render.Text     as Pretty.Text
 import qualified Dhall.Import
+import qualified Dhall.Parser
+import qualified Dhall.Parser.Expression
 import qualified Dhall.Pretty
+import qualified Dhall.Pretty.Internal
 import qualified Dhall.Util
 import qualified System.AtomicWrite.Writer.LazyText        as AtomicWrite.LazyText
 import qualified System.Console.ANSI
 import qualified System.FilePath
 import qualified System.IO
+import qualified Text.Megaparsec.Error                     as Megaparsec
 
 -- | Arguments to the `format` subcommand
 data Format = Format
     { chosenCharacterSet :: Maybe CharacterSet
+    , commentControl     :: Dhall.Util.WhitespaceControl
     , censor             :: Censor
     , transitivity       :: Transitivity
     , inputs             :: NonEmpty Input
@@ -62,15 +71,12 @@ format (Format { inputs = inputs0, transitivity = transitivity0, ..}) =
                 InputFile file ->
                     System.FilePath.takeDirectory file
 
-        let status = Dhall.Import.emptyStatus directory
+        let status = (Dhall.Import.emptyStatus directory)
+                { Dhall.Import._commentControl = commentControl }
 
-        let layoutHeaderAndExpr (Header header, expr) =
+        let layoutHeaderAndExpr (header, expr) =
                 let characterSet = fromMaybe (detectCharacterSet expr) chosenCharacterSet
-                in
-                Dhall.Pretty.layout
-                    (   Pretty.pretty header
-                    <>  Dhall.Pretty.prettyCharacterSet characterSet expr
-                    <>  "\n")
+                in formatHeaderAndExpr characterSet header expr
 
         (inputName, originalText, transitivity) <- case input of
             InputFile file -> do
@@ -82,8 +88,7 @@ format (Format { inputs = inputs0, transitivity = transitivity0, ..}) =
 
                 return ("(input)", text, NonTransitive)
 
-
-        headerAndExpr@(_, parsedExpression) <- Dhall.Util.getExpressionAndHeaderFromStdinText censor inputName originalText
+        headerAndExpr@(_, parsedExpression) <- Dhall.Util.getExpressionAndHeaderFromStdinText commentControl censor inputName originalText
 
         case transitivity of
             Transitive ->
@@ -126,3 +131,24 @@ format (Format { inputs = inputs0, transitivity = transitivity0, ..}) =
                     if originalText == formattedText
                         then Right ()
                         else Left CheckFailed{..}
+
+-- | Format 'Header' and 'Expr' with a given 'CharacterSet'
+formatHeaderAndExpr
+    :: CharacterSet
+    -> Header
+    -> Expr Src Import
+    -> Pretty.SimpleDocStream Dhall.Pretty.Ann
+formatHeaderAndExpr characterSet (Header "") expr =
+    Dhall.Pretty.layout
+        (   Dhall.Pretty.prettyCharacterSet characterSet expr
+        <>  "\n")
+formatHeaderAndExpr characterSet (Header headerTxt) expr =
+    case Dhall.Parser.runParser Dhall.Parser.Expression.multiComment Dhall.Util.UnsupportedCommentsForbidden "(header)" headerTxt of
+        Right header ->
+            Dhall.Pretty.layout
+                (   Dhall.Pretty.Internal.renderComment False header
+                <>  Pretty.hardline
+                <>  Dhall.Pretty.prettyCharacterSet characterSet expr
+                <>  "\n")
+        Left e -> internalError $ "Dhall.Format.formatHeaderAndExpr: Invalid Header\n" <>
+            Text.pack (Megaparsec.errorBundlePretty e)

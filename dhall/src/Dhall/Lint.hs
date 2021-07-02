@@ -68,9 +68,9 @@ lint =  Dhall.Optics.rewriteOf subExpressions rewrite
 -- | Remove unused `Let` bindings.
 removeUnusedBindings :: Eq a => Expr s a -> Maybe (Expr s a)
 -- Don't remove assertions!
-removeUnusedBindings (Let (Binding _ _ _ _ _ e) _)
+removeUnusedBindings (Let (Binding _ _ _ _ _ _ e) _)
     | isOrContainsAssert e = Nothing
-removeUnusedBindings (Let (Binding _ a _ _ _ _) d)
+removeUnusedBindings (Let (Binding _ a _ _ _ _ _) d)
     | not (V a 0 `Core.freeIn` d) =
         Just (Core.shift (-1) (V a 0) d)
 removeUnusedBindings _ = Nothing

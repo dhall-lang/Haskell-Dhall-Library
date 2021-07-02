@@ -26,7 +26,7 @@ issue412 :: Core.Expr s Void -> Gauge.Benchmarkable
 issue412 prelude = Gauge.whnf TypeCheck.typeOf expr
   where
     expr
-      = Core.Let (Core.Binding Nothing "prelude" Nothing Nothing Nothing prelude)
+      = Core.Let (Core.Binding Nothing "prelude" Nothing Nothing Nothing Nothing prelude)
       $ Core.ListLit Nothing
       $ Seq.replicate 5
       $ Core.Var (Core.V "prelude" 0) `Core.Field` types `Core.Field` little `Core.Field` foo
@@ -45,10 +45,12 @@ unionPerformance prelude = Gauge.whnf TypeCheck.typeOf expr
                 Nothing
                 Nothing
                 Nothing
+                Nothing
                 (Core.Let
                     (Core.Binding
                         Nothing
                         "big"
+                        Nothing
                         Nothing
                         Nothing
                         Nothing

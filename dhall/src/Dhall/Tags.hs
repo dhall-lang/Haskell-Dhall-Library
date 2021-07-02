@@ -205,11 +205,9 @@ getTagsFromExpr = go (LC 0 0) []
               where pos = firstPosFromExpr lpos e
 
           parseBinding :: LineColumn -> Binding Src a -> [(LineColumn, Text)]
-          parseBinding lpos b = go p2 [(p0, variable b)] (value b)
-              where p0 = posFromBinding (bindingSrc0 b) lpos
-                    p1 = posFromBinding (bindingSrc1 b) p0
-                    p2 = posFromBinding (bindingSrc2 b) p1
-          posFromBinding src startPos = maybe startPos srcToLineColumn src
+          parseBinding lpos b = go pos [(pos, variable b)] (value b)
+            where
+              pos = maybe lpos srcToLineColumn (variableSrc b)
 
 srcToLineColumn :: Src -> LineColumn
 srcToLineColumn s = LC line column

@@ -65,8 +65,8 @@ judgmentallyEqual = Eval.judgmentallyEqual
 -}
 subst :: Var -> Expr s a -> Expr s a -> Expr s a
 subst _ _ (Const a) = Const a
-subst (V x n) e (Lam cs (FunctionBinding src0 y src1 src2 _A) b) =
-    Lam cs (FunctionBinding src0 y src1 src2 _A') b'
+subst (V x n) e (Lam cs (FunctionBinding c0 y s c1 c2 _A) b) =
+    Lam cs (FunctionBinding c0 y s c1 c2 _A') b'
   where
     _A' = subst (V x n )                         e  _A
     b'  = subst (V x n') (Syntax.shift 1 (V y 0) e)  b
@@ -77,8 +77,8 @@ subst (V x n) e (Pi cs y _A _B) = Pi cs y _A' _B'
     _B' = subst (V x n') (Syntax.shift 1 (V y 0) e) _B
     n'  = if x == y then n + 1 else n
 subst v e (Var v') = if v == v' then e else Var v'
-subst (V x n) e (Let (Binding src0 f src1 mt src2 r) b) =
-    Let (Binding src0 f src1 mt' src2 r') b'
+subst (V x n) e (Let (Binding comment0 f src comment1 mt comment2 r) b) =
+    Let (Binding comment0 f src comment1 mt' comment2 r') b'
   where
     b' = subst (V x n') (Syntax.shift 1 (V f 0) e) b
       where
@@ -115,7 +115,7 @@ boundedType _                = False
 
 >>> mfb = Syntax.makeFunctionBinding
 >>> alphaNormalize (Lam mempty (mfb "a" (Const Type)) (Lam mempty (mfb "b" (Const Type)) (Lam mempty (mfb "x" "a") (Lam mempty (mfb "y" "b") "x"))))
-Lam Nothing (FunctionBinding {functionBindingSrc0 = Nothing, functionBindingVariable = "_", functionBindingSrc1 = Nothing, functionBindingSrc2 = Nothing, functionBindingAnnotation = Const Type}) (Lam Nothing (FunctionBinding {functionBindingSrc0 = Nothing, functionBindingVariable = "_", functionBindingSrc1 = Nothing, functionBindingSrc2 = Nothing, functionBindingAnnotation = Const Type}) (Lam Nothing (FunctionBinding {functionBindingSrc0 = Nothing, functionBindingVariable = "_", functionBindingSrc1 = Nothing, functionBindingSrc2 = Nothing, functionBindingAnnotation = Var (V "_" 1)}) (Lam Nothing (FunctionBinding {functionBindingSrc0 = Nothing, functionBindingVariable = "_", functionBindingSrc1 = Nothing, functionBindingSrc2 = Nothing, functionBindingAnnotation = Var (V "_" 1)}) (Var (V "_" 1)))))
+Lam Nothing (FunctionBinding {functionBindingComment0 = Nothing, functionBindingVariable = "_", functionBindingVariableSrc = Nothing, functionBindingComment1 = Nothing, functionBindingComment2 = Nothing, functionBindingAnnotation = Const Type}) (Lam Nothing (FunctionBinding {functionBindingComment0 = Nothing, functionBindingVariable = "_", functionBindingVariableSrc = Nothing, functionBindingComment1 = Nothing, functionBindingComment2 = Nothing, functionBindingAnnotation = Const Type}) (Lam Nothing (FunctionBinding {functionBindingComment0 = Nothing, functionBindingVariable = "_", functionBindingVariableSrc = Nothing, functionBindingComment1 = Nothing, functionBindingComment2 = Nothing, functionBindingAnnotation = Var (V "_" 1)}) (Lam Nothing (FunctionBinding {functionBindingComment0 = Nothing, functionBindingVariable = "_", functionBindingVariableSrc = Nothing, functionBindingComment1 = Nothing, functionBindingComment2 = Nothing, functionBindingAnnotation = Var (V "_" 1)}) (Var (V "_" 1)))))
 
     α-normalization does not affect free variables:
 
@@ -192,7 +192,7 @@ normalizeWithM ctx e0 = loop (Syntax.denote e0)
               f' <- loop f
               a' <- loop a
               case f' of
-                Lam _ (FunctionBinding _ x _ _ _A) b₀ -> do
+                Lam _ (FunctionBinding _ x _ _ _ _A) b₀ -> do
 
                     let a₂ = Syntax.shift 1 (V x 0) a'
                     let b₁ = subst (V x 0) a₂ b₀
@@ -381,7 +381,7 @@ normalizeWithM ctx e0 = loop (Syntax.denote e0)
                         case res2 of
                             Nothing -> pure (App f' a')
                             Just app' -> loop app'
-    Let (Binding _ f _ _ _ r) b -> loop b''
+    Let (Binding _ f _ _ _ _ r) b -> loop b''
       where
         r'  = Syntax.shift   1  (V f 0) r
         b'  = subst (V f 0) r' b
@@ -507,11 +507,11 @@ normalizeWithM ctx e0 = loop (Syntax.denote e0)
     None -> pure None
     Record kts -> Record . Dhall.Map.sort <$> kts'
       where
-        f (RecordField s0 expr s1 s2) = (\e -> RecordField s0 e s1 s2) <$> loop expr
+        f (RecordField c0 s expr c1 c2) = (\e -> RecordField c0 s e c1 c2) <$> loop expr
         kts' = traverse f kts
     RecordLit kvs -> RecordLit . Dhall.Map.sort <$> kvs'
       where
-        f (RecordField s0 expr s1 s2) = (\e -> RecordField s0 e s1 s2) <$> loop expr
+        f (RecordField c0 s expr c1 c2) = (\e -> RecordField c0 s e c1 c2) <$> loop expr
         kvs' = traverse f kvs
     Union kts -> Union . Dhall.Map.sort <$> kts'
       where
@@ -525,7 +525,7 @@ normalizeWithM ctx e0 = loop (Syntax.denote e0)
         decide (RecordLit m) (RecordLit n) =
             RecordLit (Dhall.Map.unionWith f m n)
           where
-            f (RecordField _ expr _ _) (RecordField _ expr' _ _) =
+            f (RecordField _ _ expr _ _) (RecordField _ _ expr' _ _) =
               Syntax.makeRecordField $ decide expr expr'
         decide l r =
             Combine cs mk l r
@@ -538,7 +538,7 @@ normalizeWithM ctx e0 = loop (Syntax.denote e0)
         decide (Record m) (Record n) =
             Record (Dhall.Map.unionWith f m n)
           where
-            f (RecordField _ expr _ _) (RecordField _ expr' _ _) =
+            f (RecordField _ _ expr _ _) (RecordField _ _ expr' _ _) =
               Syntax.makeRecordField $ decide expr expr'
         decide l r =
             CombineTypes cs l r
@@ -732,7 +732,7 @@ isNormalized e0 = loop (Syntax.denote e0)
     loop e = case e of
       Const _ -> True
       Var _ -> True
-      Lam _ (FunctionBinding Nothing _ Nothing Nothing a) b -> loop a && loop b
+      Lam _ (FunctionBinding Nothing _ Nothing Nothing Nothing a) b -> loop a && loop b
       Lam _ _ _ -> False
       Pi _ _ a b -> loop a && loop b
       App f a -> loop f && loop a && case App f a of
@@ -860,11 +860,11 @@ isNormalized e0 = loop (Syntax.denote e0)
       None -> True
       Record kts -> Dhall.Map.isSorted kts && all decide kts
         where
-          decide (RecordField Nothing exp' Nothing Nothing) = loop exp'
+          decide (RecordField Nothing Nothing exp' Nothing Nothing) = loop exp'
           decide _ = False
       RecordLit kvs -> Dhall.Map.isSorted kvs && all decide kvs
         where
-          decide (RecordField Nothing exp' Nothing Nothing) = loop exp'
+          decide (RecordField Nothing Nothing exp' Nothing Nothing) = loop exp'
           decide _ = False
       Union kts -> Dhall.Map.isSorted kts && all (all loop) kts
       Combine _ _ x y -> loop x && loop y && decide x y
@@ -897,7 +897,7 @@ isNormalized e0 = loop (Syntax.denote e0)
       ToMap x t -> case x of
           RecordLit _ -> False
           _ -> loop x && all loop t
-      Field r (FieldSelection Nothing k Nothing) -> case r of
+      Field r (FieldSelection Nothing Nothing k Nothing) -> case r of
           RecordLit _ -> False
           Project _ _ -> False
           Prefer _ _ (RecordLit m) _ -> Dhall.Map.keys m == [k] && loop r

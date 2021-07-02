@@ -1,6 +1,1 @@
-let foo =
-
-    {- test -}
-      "hello"
-
-in  foo
+let foo = {- test -} "hello" in foo

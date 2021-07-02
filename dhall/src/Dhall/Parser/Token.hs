@@ -7,6 +7,7 @@ module Dhall.Parser.Token (
     endOfLine,
     validCodepoint,
     whitespace,
+    whitespaceChunk,
     lineComment,
     blockComment,
     nonemptyWhitespace,
@@ -324,14 +325,26 @@ identifier = do
     n <- indexed <|> pure 0
     return (V x n)
 
+{- | Parse a single whitespace chunk
+
+     Depending on the 'WhitespaceControl' that is set as part of the 'Parser',
+     it will also parse a comment as a whitespace chunk
+-}
 whitespaceChunk :: Parser ()
-whitespaceChunk =
-    choice
-        [ void (Dhall.Parser.Combinators.takeWhile1 predicate)
-        , void (Text.Parser.Char.text "\r\n" <?> "newline")
-        , void lineComment
-        , void blockComment
-        ] <?> "whitespace"
+whitespaceChunk = do
+    commentControl <- askWhitespaceControl
+
+    let descriptor = case commentControl of
+            UnsupportedCommentsPermitted -> "whitespace"
+            UnsupportedCommentsForbidden -> "comment-free whitespace"
+
+    choice (concat
+        [ [ void (Dhall.Parser.Combinators.takeWhile1 predicate)
+          , void (Text.Parser.Char.text "\r\n" <?> "newline")
+          ]
+        , [ void lineComment | commentControl == UnsupportedCommentsPermitted ]
+        , [ void blockComment | commentControl == UnsupportedCommentsPermitted ]
+        ]) <?> descriptor
   where
     predicate c = c == ' ' || c == '\t' || c == '\n'
 
@@ -359,9 +372,11 @@ hexNumber = choice [ hexDigit, hexUpper, hexLower ]
 
 -- | Parse a Dhall's single-line comment, starting from `--` and until the
 --   last character of the line /before/ the end-of-line character
-lineComment :: Parser Text
+lineComment :: Parser (Dhall.Syntax.CommentType, Text)
 lineComment = do
-    _ <- text "--"
+    (commentType, prefix) <-
+             (,) Dhall.Syntax.DocComment <$> text "--|"
+        <|>  (,) Dhall.Syntax.RawComment <$> text "--"
 
     let predicate c = ('\x20' <= c && c <= '\x10FFFF') || c == '\t'
 
@@ -369,19 +384,21 @@ lineComment = do
 
     _ <- endOfLine
 
-    return ("--" <> commentText)
+    return (commentType, prefix <> commentText)
 
 -- | Parsed text doesn't include opening braces
-blockComment :: Parser Text
+blockComment :: Parser (Dhall.Syntax.CommentType, Text)
 blockComment = do
-    _ <- text "{-"
+    (commentType, prefix) <-
+             (,) Dhall.Syntax.DocComment <$> text "{-|"
+        <|>  (,) Dhall.Syntax.RawComment <$> text "{-"
     c <- blockCommentContinue
-    pure ("{-" <> c <> "-}")
+    pure (commentType, prefix <> c <> "-}")
 
 blockCommentChunk :: Parser Text
 blockCommentChunk =
     choice
-        [ blockComment  -- Nested block comment
+        [ snd <$> blockComment  -- Nested block comment
         , characters
         , character
         , endOfLine

@@ -59,6 +59,7 @@ import qualified System.IO                                 as IO
 -- | Arguments to the @rewrite-with-schemas@ subcommand
 data Schemas = Schemas
     { chosenCharacterSet :: Maybe CharacterSet
+    , commentControl     :: Util.WhitespaceControl
     , censor             :: Censor
     , input              :: Input
     , outputMode         :: OutputMode
@@ -72,7 +73,7 @@ schemasCommand Schemas{..} = do
         InputFile file -> (,) file <$> Text.IO.readFile file
         StandardInput  -> (,) "(input)" <$> Text.IO.getContents
 
-    (Header header, expression) <- Util.getExpressionAndHeaderFromStdinText censor inputName originalText
+    (Header header, expression) <- Util.getExpressionAndHeaderFromStdinText commentControl censor inputName originalText
 
     let characterSet = fromMaybe (detectCharacterSet expression) chosenCharacterSet
 

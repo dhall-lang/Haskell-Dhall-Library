@@ -15,7 +15,6 @@ import Numeric.Natural                 (Natural)
 import Text.Megaparsec
     ( Parsec
     , errorBundlePretty
-    , parse
     , some
     , optional
     , (<|>)
@@ -70,6 +69,8 @@ writeDhall path expr = do
   Text.writeFile path $ pretty expr <> "\n"
 
   let chosenCharacterSet = Nothing -- Infer from input
+
+  let commentControl = Dhall.Util.UnsupportedCommentsPermitted
 
   let censor = Dhall.Util.NoCensor
 
@@ -182,7 +183,12 @@ parsePrefixMap =
       e <- Dhall.Parser.expr
       imp <- parseImport prefix e
       return (pack prefix, imp)
-    result = parse ((Dhall.Parser.unParser parser `sepBy1` char ',') <* eof) "MAPPING"
+
+    result =
+        Dhall.Parser.runParser
+            ((parser `sepBy1` char ',') <* eof)
+            Dhall.Util.UnsupportedCommentsPermitted
+            "MAPPING"
 
 parseSplits :: Options.Applicative.ReadM (Data.Map.Map ModelHierarchy (Maybe ModelName))
 parseSplits =
@@ -198,7 +204,12 @@ parseSplits =
         mo <- parseModel
         return mo
       return (path, model)
-    result = parse ((Dhall.Parser.unParser parser `sepBy1` char ',') <* eof) "MAPPING"
+
+    result =
+        Dhall.Parser.runParser
+            ((parser `sepBy1` char ',') <* eof)
+            Dhall.Util.UnsupportedCommentsPermitted
+            "MAPPING"
 
 
 parseOptions :: Options.Applicative.Parser Options

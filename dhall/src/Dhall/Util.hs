@@ -22,6 +22,7 @@ module Dhall.Util
     , CheckFailed(..)
     , MultipleCheckFailed(..)
     , handleMultipleChecksFailed
+    , WhitespaceControl(..)
     ) where
 
 import Control.Exception         (Exception (..))
@@ -33,7 +34,7 @@ import Data.List.NonEmpty        (NonEmpty (..))
 import Data.String               (IsString)
 import Data.Text                 (Text)
 import Data.Text.Prettyprint.Doc (Doc, Pretty)
-import Dhall.Parser              (Header (..), ParseError)
+import Dhall.Parser              (Header (..), ParseError, WhitespaceControl(..))
 import Dhall.Pretty              (Ann)
 import Dhall.Src                 (Src)
 import Dhall.Syntax              (Expr, Import)
@@ -231,13 +232,13 @@ getExpression :: Censor -> Input -> IO (Expr Src Import)
 getExpression censor = get Dhall.Parser.exprFromText censor . Input_
 
 -- | Convenient utility for retrieving an expression along with its header
-getExpressionAndHeader :: Censor -> Input -> IO (Header, Expr Src Import)
-getExpressionAndHeader censor =
-    get Dhall.Parser.exprAndHeaderFromText censor . Input_
+getExpressionAndHeader :: WhitespaceControl -> Censor -> Input -> IO (Header, Expr Src Import)
+getExpressionAndHeader commentControl censor =
+    get (Dhall.Parser.exprAndHeaderFromText commentControl) censor . Input_
 
 -- | Convenient utility for retrieving an expression along with its header from
 -- | text already read from STDIN (so it's not re-read)
 getExpressionAndHeaderFromStdinText
-    :: Censor -> String -> Text -> IO (Header, Expr Src Import)
-getExpressionAndHeaderFromStdinText censor inputName =
-    get Dhall.Parser.exprAndHeaderFromText censor . StdinText inputName
+    :: WhitespaceControl -> Censor -> String -> Text -> IO (Header, Expr Src Import)
+getExpressionAndHeaderFromStdinText commentControl censor inputName =
+    get (Dhall.Parser.exprAndHeaderFromText commentControl) censor . StdinText inputName

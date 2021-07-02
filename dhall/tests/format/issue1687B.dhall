@@ -1,6 +1,7 @@
 let {- foo
 
-    bar -}
+    bar
+    -}
     x =
       1
 

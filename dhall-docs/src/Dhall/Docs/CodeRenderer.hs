@@ -177,9 +177,10 @@ fragments = Data.List.sortBy sorter . removeUnusedDecls . Writer.execWriter . in
         -- are not able to generate the 'SourceCodeFragment's in lexicographical
         -- without calling 'Data.List.sortBy' after
         Let (Binding
-                (Just Src { srcEnd = srcEnd0 })
+                _
                 name
-                (Just Src { srcStart = srcStart1 })
+                (Just Src { srcStart, srcEnd })
+                _
                 annotation
                 _
                 value) expr' -> do
@@ -193,7 +194,7 @@ fragments = Data.List.sortBy sorter . removeUnusedDecls . Writer.execWriter . in
 
             bindingJtdInfo <- infer context value
 
-            let nameSrc = makeSrcForLabel srcEnd0 srcStart1 name
+            let nameSrc = makeSrcForLabel srcStart srcEnd name
             let nameDecl = NameDecl nameSrc name bindingJtdInfo
 
             Writer.tell [SourceCodeFragment nameSrc (NameDeclaration nameDecl)]
@@ -207,27 +208,28 @@ fragments = Data.List.sortBy sorter . removeUnusedDecls . Writer.execWriter . in
                     return t
 
         Lam _ (FunctionBinding
-                (Just Src{srcEnd = srcEnd0})
+                _
                 name
-                (Just Src{srcStart = srcStart1})
+                (Just Src{srcStart, srcEnd})
+                _
                 _
                 t) expr -> do
             dhallType <- infer context t
 
-            let nameSrc = makeSrcForLabel srcEnd0 srcStart1 name
+            let nameSrc = makeSrcForLabel srcStart srcEnd name
             let nameDecl = NameDecl nameSrc name dhallType
 
             Writer.tell [SourceCodeFragment nameSrc (NameDeclaration nameDecl)]
             infer (Context.insert name nameDecl context) expr
 
-        Field e (FieldSelection (Just Src{srcEnd=posStart}) label (Just Src{srcStart=posEnd})) -> do
+        Field e (FieldSelection _ _ label (Just Src{srcStart, srcEnd})) -> do
             fields <- do
                 dhallType <- infer context e
                 case dhallType of
                     NoInfo -> return mempty
                     RecordFields s -> return $ Set.toList s
 
-            let src = makeSrcForLabel posStart posEnd label
+            let src = makeSrcForLabel srcStart srcEnd label
             let match (NameDecl _ l _) = l == label
             case filter match fields of
                 x@(NameDecl _ _ t) : _ -> do
@@ -247,9 +249,9 @@ fragments = Data.List.sortBy sorter . removeUnusedDecls . Writer.execWriter . in
       where
         handleRecordLike l = RecordFields . Set.fromList <$> mapM f l
           where
-            f (key, RecordField (Just Src{srcEnd = startPos}) val (Just Src{srcStart = endPos}) _) = do
+            f (key, RecordField _ (Just Src{ srcStart, srcEnd }) val _ _) = do
                 dhallType <- infer context val
-                let nameSrc = makeSrcForLabel startPos endPos key
+                let nameSrc = makeSrcForLabel srcStart srcEnd key
                 let nameDecl = NameDecl nameSrc key dhallType
                 Writer.tell [SourceCodeFragment nameSrc (NameDeclaration nameDecl)]
                 return nameDecl

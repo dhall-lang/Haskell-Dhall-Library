@@ -68,6 +68,9 @@ module Dhall.Pretty.Internal (
     , rbrace
     , rbracket
     , rparen
+
+    , renderComment
+    , renderMaybeComment
     ) where
 
 import Control.DeepSeq            (NFData)
@@ -171,107 +174,130 @@ prettySrcExpr = prettyCharacterSet Unicode
 duplicate :: a -> (a, a)
 duplicate x = (x, x)
 
-isWhitespace :: Char -> Bool
-isWhitespace c =
-    case c of
-        ' '  -> True
-        '\n' -> True
-        '\t' -> True
-        '\r' -> True
-        _    -> False
-
-{-| Used to render inline `Src` spans preserved by the syntax tree
-
-    >>> let unusedSourcePos = Text.Megaparsec.SourcePos "" (Text.Megaparsec.mkPos 1) (Text.Megaparsec.mkPos 1)
-    >>> let nonEmptySrc = Src unusedSourcePos unusedSourcePos "-- Documentation for x\n"
-    >>> "let" <> " " <> renderSrc id (Just nonEmptySrc) <> "x = 1 in x"
-    let -- Documentation for x
-        x = 1 in x
-    >>> let emptySrc = Src unusedSourcePos unusedSourcePos "      "
-    >>> "let" <> " " <> renderSrc id (Just emptySrc) <> "x = 1 in x"
-    let x = 1 in x
-    >>> "let" <> " " <> renderSrc id Nothing <> "x = 1 in x"
-    let x = 1 in x
--}
-renderSrc
-    :: (Text -> Text)
-    -- ^ Used to preprocess the comment string (e.g. to strip whitespace)
-    -> Maybe Src
-    -- ^ Source span to render (if present)
-    -> Doc Ann
-renderSrc strip (Just (Src {..}))
-    | not (Text.all isWhitespace srcText) =
-        renderComment (strip srcText)
-renderSrc _ _ =
-    mempty
-
-{-| Render a comment.
-
-    Any preprocessing, such as whitespace stripping, needs to be handled by the
-    caller, see e.g. 'renderSrc'.
-
-    See the documentation for 'renderSrc' for examples.
--}
-renderComment :: Text -> Doc Ann
-renderComment text =
-    Pretty.align (Pretty.concatWith f newLines <> suffix)
+-- | Normalize a MultiComment.
+--
+-- * Successive comments of the same type (doc or raw comments) are merged.
+-- * When at least 1 of the comments to be merged is a block comment, it makes
+--   it a block comment.
+-- * The lines of Text do not include comment opening (and closing) characters.
+-- * End of lines are stripped.
+-- * Empty leading and terminating lines are removed.
+normalizeMultiComment :: MultiComment -> NonEmpty (Bool, CommentType, NonEmpty Text)
+normalizeMultiComment (MultiComment cs) =
+    normalizeOne <$> NonEmpty.groupWith1 getCommentType cs
   where
-    horizontalSpace c = c == ' ' || c == '\t'
+    getCommentType = \case
+        BlockComment commentType _ -> commentType
+        LineComment commentType _ -> commentType
 
-    suffix =
-        if Text.null text || Text.last text == '\n'
-        then mempty
-        else " "
+    isBlockComment = \case
+        BlockComment _ _ -> True
+        LineComment _ _ -> False
 
-    oldLines = Text.splitOn "\n" text
+    -- Remove leading and terminating empty lines
+    stripEmptyLines =
+          Data.List.dropWhileEnd (Text.null . Text.strip)
+        . Data.List.dropWhile (Text.null . Text.strip)
 
-    spacePrefix = Text.takeWhile horizontalSpace
+    -- When comment is empty, keep exactly 1 empty line
+    atLeastOneLine = \case
+        [] -> "" :| []
+        x:xs -> x :| xs
 
-    commonPrefix a b = case Text.commonPrefixes a b of
-        Nothing        -> ""
-        Just (c, _, _) -> c
+    stripDoc DocComment = Text.stripPrefix "|"
+    stripDoc _          = Just
 
-    sharedSpacePrefix []       = ""
-    sharedSpacePrefix (l : ls) = foldl' commonPrefix (spacePrefix l) ls
+    toLines = \case
+        BlockComment commentType txt
+            | Just rest <- Text.stripPrefix "{-" txt
+            , Just rest' <- stripDoc commentType rest
+            , Just body <- Text.stripSuffix "-}" rest'
+            -> Text.stripEnd <$> Text.lines body
+        LineComment commentType txts
+            | Just (firstLine:|rest) <- traverse (Text.stripPrefix "--") txts
+            , Just firstLine' <- stripDoc commentType firstLine
+            -> Text.stripEnd <$> firstLine' : rest
+        c -> internalError $
+            "Dhall.Pretty.Internal.normalizeMultiComment: Unexpected comment\n"
+            <> Text.pack (show c)
 
-    blank = Text.all horizontalSpace
+    normalizeOne comments =
+        ( any isBlockComment comments
+        , getCommentType $ NonEmpty.head comments
+        , atLeastOneLine . stripEmptyLines $ concatMap toLines comments
+        )
 
-    newLines =
-        case oldLines of
-            [] ->
-               []
-            l0 : ls ->
-                let sharedPrefix =
-                        sharedSpacePrefix (filter (not . blank) ls)
+-- | Helper function to render a MultiComment if present
+renderMaybeComment :: Maybe MultiComment -> Doc Ann
+renderMaybeComment Nothing = mempty
+renderMaybeComment (Just c) = renderComment True c
 
-                    perLine l =
-                        case Text.stripPrefix sharedPrefix l of
-                            Nothing -> Pretty.pretty l
-                            Just l' -> Pretty.pretty l'
+-- | Render a MultiComment after normalizing it
+renderComment :: Bool -> MultiComment -> Doc Ann
+renderComment trailingWhitespace multiComment =
+    go (normalizeMultiComment multiComment)
+  where
+    go (c :| []) = renderOne trailingWhitespace c
+    go (c@(True, _, _) :| (x:xs)) = renderOne True c <> go (x :| xs)
+    go (c@(False, _, _) :| (x:xs)) =
+      -- We need an extra hardline after a group of line comments so that it
+      -- they don't merge with the next comment
+      renderOne True c <> Pretty.hardline <> go (x :| xs)
 
-                in  Pretty.pretty l0 : map perLine ls
+    startSpace firstLine
+        | Just (c, _) <- Text.uncons firstLine
+        , c /= ' ' -- Line not already starting with a space
+        = " "
+
+        | otherwise
+        = mempty
+
+    prettyLines = Pretty.concatWith f . fmap Pretty.pretty
 
     f x y = x <> Pretty.hardline <> y
 
-{-| This is a variant of 'renderSrc' with the following differences:
+    renderDoc DocComment = "|"
+    renderDoc _          = mempty
 
-      * The 'srcText' is stripped of all whitespace at the start and the end.
-      * When the stripped 'srcText' is empty, the result is 'Nothing'.
--}
-renderSrcMaybe :: Maybe Src -> Maybe (Doc Ann)
-renderSrcMaybe (Just Src{..}) =
-    case Text.dropAround isWhitespace srcText of
-        "" -> Nothing
-        t  -> Just (renderComment t)
-renderSrcMaybe _ = Nothing
+    renderOne trailingWhitespace' (isBlockComment, commentType, commentLines) =
+        case commentLines of
+            -- Keep a single line block comment as a single line
+            singleLine :| [] | isBlockComment ->
+                    "{-"
+                <>  renderDoc commentType
+                <>  startSpace singleLine
+                <>  Pretty.pretty singleLine
+                <>  " -}"
+                <>  applyTrailing space
 
-{-| @
-    'containsComment' mSrc ≡ 'Data.Maybe.isJust' ('renderSrcMaybe' mSrc)
-    @
--}
-containsComment :: Maybe Src -> Bool
-containsComment Nothing        = False
-containsComment (Just Src{..}) = not (Text.all isWhitespace srcText)
+            -- Otherwise format a block comment over multiple lines
+            firstLine :| _ | isBlockComment ->
+                Pretty.align
+                    ( Pretty.nesting (\n ->
+                        -- Here we unindent in order to conserve the original
+                        -- leading whitespace the block comment had.
+                        Pretty.nest (-n)
+                            (   "{-"
+                            <>  renderDoc commentType
+                            <>  startSpace firstLine
+                            <>  prettyLines commentLines
+                            )
+                        )
+                    <>  Pretty.hardline
+                    <>  "-}"
+                    )
+                <> applyTrailing Pretty.hardline
+
+            -- Format multiple line comments
+            firstLine :| otherLines ->
+                Pretty.align (prettyLines (
+                    ("--" <> renderDoc commentType <> startSpace firstLine <> firstLine)
+                    :| fmap (\l -> "--" <> startSpace l <> l) otherLines))
+                <> applyTrailing Pretty.hardline
+      where
+        applyTrailing w
+            | trailingWhitespace' = w
+            | otherwise = mempty
 
 -- Annotation helpers
 keyword, syntax, label, literal, builtin, operator :: Doc Ann -> Doc Ann
@@ -525,7 +551,7 @@ prettyLabel = prettyLabelShared False
 prettyAnyLabel :: Text -> Doc Ann
 prettyAnyLabel = prettyLabelShared True
 
-prettyAnyLabels :: Foldable list => list (Maybe Src, Text, Maybe Src) -> Doc Ann
+prettyAnyLabels :: Foldable list => list (Maybe MultiComment, Text, Maybe MultiComment) -> Doc Ann
 prettyAnyLabels keys = Pretty.group (Pretty.flatAlt long short)
   where
     short = (mconcat . Pretty.punctuate dot . map prettyKey . toList) keys
@@ -540,14 +566,14 @@ prettyAnyLabels keys = Pretty.group (Pretty.flatAlt long short)
                 . Pretty.punctuate (Pretty.hardline <> ". ")
                 $ Pretty.indent 2 doc : docs
 
-    prettyKey (mSrc0, key, mSrc1) =
+    prettyKey (mComment0, key, mComment1) =
           Pretty.align
         . mconcat
         . Pretty.punctuate Pretty.hardline
         . Data.Maybe.catMaybes
-        $ [ renderSrcMaybe mSrc0
+        $ [ renderComment False <$> mComment0
           , Just (prettyAnyLabel key)
-          , renderSrcMaybe mSrc1
+          , renderComment False <$> mComment1
           ]
 
 prettyLabels :: [Text] -> Doc Ann
@@ -613,10 +639,11 @@ escapeEnvironmentVariable t
 'prettyCharacterSet' largely ignores 'Note's. 'Note's do however matter for
 the layout of let-blocks:
 
->>> let inner = Let (Binding Nothing "x" Nothing Nothing Nothing (NaturalLit 1)) (Var (V "x" 0)) :: Expr Src ()
->>> prettyCharacterSet ASCII (Let (Binding Nothing "y" Nothing Nothing Nothing (NaturalLit 2)) inner)
+>>> let inner = Let (Binding Nothing "x" Nothing Nothing Nothing Nothing (NaturalLit 1)) (Var (V "x" 0)) :: Expr Src ()
+>>> prettyCharacterSet ASCII (Let (Binding Nothing "y" Nothing Nothing Nothing Nothing (NaturalLit 2)) inner)
 let y = 2 let x = 1 in x
->>> prettyCharacterSet ASCII (Let (Binding Nothing "y" Nothing Nothing Nothing (NaturalLit 2)) (Note (Src unusedSourcePos unusedSourcePos "") inner))
+>>> let unusedSourcePos = Text.Megaparsec.SourcePos "" (Text.Megaparsec.mkPos 1) (Text.Megaparsec.mkPos 1)
+>>> prettyCharacterSet ASCII (Let (Binding Nothing "y" Nothing Nothing Nothing Nothing (NaturalLit 2)) (Note (Src unusedSourcePos unusedSourcePos "") inner))
 let y = 2 in let x = 1 in x
 
 This means the structure of parsed let-blocks is preserved.
@@ -736,43 +763,28 @@ prettyPrinters characterSet =
       where
         MultiLet as b = multiLet a0 b0
 
-        isSpace c = c == ' ' || c == '\t'
-        stripSpaces =
-            Text.dropAround isSpace
-          . Text.intercalate "\n"
-          . map (Text.dropWhileEnd isSpace)
-          . Text.splitOn "\n"
-
-        -- Strip a single newline character. Needed to ensure idempotency in
-        -- cases where we add hard line breaks.
-        stripNewline t =
-            case Text.uncons t' of
-                Just ('\n', t'') -> stripSpaces t''
-                _ -> t'
-          where t' = stripSpaces t
-
-        docA (Binding src0 c src1 Nothing src2 e) =
+        docA (Binding comment0 c _ comment1 Nothing comment2 e) =
             Pretty.group (Pretty.flatAlt long short)
           where
             long =  keyword "let" <> space
                 <>  Pretty.align
-                    (   renderSrc stripSpaces src0
-                    <>  prettyLabel c <> space <> renderSrc stripSpaces src1
-                    <>  equals <> Pretty.hardline <> renderSrc stripNewline src2
+                    (   renderMaybeComment comment0
+                    <>  prettyLabel c <> space <> renderMaybeComment comment1
+                    <>  equals <> Pretty.hardline <> renderMaybeComment comment2
                     <>  "  " <> prettyExpression e
                     )
 
-            short = keyword "let" <> space <> renderSrc stripSpaces src0
-                <>  prettyLabel c <> space <> renderSrc stripSpaces src1
-                <>  equals <> space <> renderSrc stripSpaces src2
+            short = keyword "let" <> space <> renderMaybeComment comment0
+                <>  prettyLabel c <> space <> renderMaybeComment comment1
+                <>  equals <> space <> renderMaybeComment comment2
                 <>  prettyExpression e
-        docA (Binding src0 c src1 (Just (src3, d)) src2 e) =
+        docA (Binding comment0 c _ comment1 (Just (comment3, d)) comment2 e) =
                 keyword "let" <> space
             <>  Pretty.align
-                (   renderSrc stripSpaces src0
-                <>  prettyLabel c <> Pretty.hardline <> renderSrc stripNewline src1
-                <>  colon <> space <> renderSrc stripSpaces src3 <> prettyExpression d <> Pretty.hardline
-                <>  equals <> space <> renderSrc stripSpaces src2
+                (   renderMaybeComment comment0
+                <>  prettyLabel c <> Pretty.hardline <> renderMaybeComment comment1
+                <>  colon <> space <> renderMaybeComment comment3 <> prettyExpression d <> Pretty.hardline
+                <>  equals <> space <> renderMaybeComment comment2
                 <>  prettyExpression e
                 )
 
@@ -1243,8 +1255,21 @@ prettyPrinters characterSet =
             prettySelectorExpression a
 
     prettySelectorExpression :: Pretty a => Expr Src a -> Doc Ann
-    prettySelectorExpression (Field a (Dhall.Syntax.fieldSelectionLabel -> b)) =
-        prettySelectorExpression a <> dot <> prettyAnyLabel b
+    prettySelectorExpression (Field a (FieldSelection c0 c1 l _)) =
+      Pretty.group (Pretty.flatAlt long short)
+      where
+        selector = mconcat
+            [ renderMaybeComment c0
+            , dot
+            , renderMaybeComment c1
+            , prettyAnyLabel l
+            ]
+
+        short = prettySelectorExpression a <> selector
+
+        long =
+            prettySelectorExpression a <> Pretty.hardline <> Pretty.indent 2 selector
+
     prettySelectorExpression (Project a (Left b)) =
         prettySelectorExpression a <> dot <> prettyLabels b
     prettySelectorExpression (Project a (Right b)) =
@@ -1367,7 +1392,7 @@ prettyPrinters characterSet =
         -> Doc Ann
         -> KeyValue Src a
         -> (Doc Ann, Doc Ann)
-    prettyKeyValue prettyValue separator (KeyValue key mSrc val) =
+    prettyKeyValue prettyValue separator (KeyValue key mComment val) =
         duplicate (Pretty.group (Pretty.flatAlt long short))
       where
         completion _T r =
@@ -1379,13 +1404,15 @@ prettyPrinters characterSet =
                     _ ->
                         prettySelectorExpression r
 
+        renderCommentHardline Nothing = mempty
+        renderCommentHardline (Just c) =
+            renderComment False c <> Pretty.hardline
+
         short = prettyAnyLabels key
             <>  " "
             <>  separator
             <>  " "
-            <>  case renderSrcMaybe mSrc of
-                    Nothing  -> mempty
-                    Just doc -> doc <> Pretty.hardline
+            <>  renderCommentHardline mComment
             <>  prettyValue val
 
         long =  Pretty.align
@@ -1393,12 +1420,11 @@ prettyPrinters characterSet =
                     <>  preSeparator
                     )
             <>  separator
-            <>  case renderSrcMaybe mSrc of
-                    Just doc ->
+            <>  case mComment of
+                    Just _->
                             preComment
                         <>  Pretty.align
-                                (   doc
-                                <>  Pretty.hardline
+                                (   renderCommentHardline mComment
                                 <>  prettyValue val
                                 )
                     Nothing ->
@@ -1458,10 +1484,8 @@ prettyPrinters characterSet =
           where
             (preSeparator, preComment) =
                 case key of
-                    (_, _, mSrc2) :| [] | not (containsComment mSrc2) ->
-                        (" ", Pretty.hardline <> "    ")
-                    _ ->
-                        (Pretty.hardline, " ")
+                    (_, _, Nothing) :| [] -> (" ", Pretty.hardline <> "    ")
+                    _ -> (Pretty.hardline, " ")
 
 
     prettyRecord :: Pretty a => Map Text (RecordField Src a) -> Doc Ann
@@ -1470,7 +1494,7 @@ prettyPrinters characterSet =
         . map (prettyKeyValue prettyExpression colon . adapt)
         . Map.toList
       where
-        adapt (key, RecordField mSrc0 val mSrc1 mSrc2) = KeyValue (pure (mSrc0, key, mSrc1)) mSrc2 val
+        adapt (key, RecordField mComment0 _ val mComment1 mComment2) = KeyValue (pure (mComment0, key, mComment1)) mComment2 val
 
     prettyRecordLit :: Pretty a => Map Text (RecordField Src a) -> Doc Ann
     prettyRecordLit = prettyRecordLike braces
@@ -1489,13 +1513,13 @@ prettyPrinters characterSet =
         | otherwise =
             braceStyle (map prettyRecordEntry (consolidateRecordLiteral a))
       where
-        prettyRecordEntry kv@(KeyValue keys mSrc2 val) =
+        prettyRecordEntry kv@(KeyValue keys comment2 val) =
             case keys of
-                (mSrc0, key, mSrc1) :| []
+                (_, key, _) :| []
                     | Var (V key' 0) <- Dhall.Syntax.shallowDenote val
                     , key == key'
-                    , not (containsComment mSrc2) ->
-                        duplicate (prettyAnyLabels [(mSrc0, key, mSrc1)])
+                    , Nothing <- comment2 ->
+                        duplicate (prettyAnyLabels keys)
                 _ ->
                     prettyKeyValue prettyExpression equals kv
 
@@ -1700,9 +1724,9 @@ pretty_ :: Pretty a => a -> Text
 pretty_ = prettyToStrictText
 
 data KeyValue s a = KeyValue
-    { _keyValueKeys  :: NonEmpty (Maybe s, Text, Maybe s)
-    , _keyValueSrc   :: Maybe s
-    , _keyValueValue :: Expr s a
+    { _keyValueKeys    :: NonEmpty (Maybe MultiComment, Text, Maybe MultiComment)
+    , _keyValueComment :: Maybe MultiComment
+    , _keyValueValue   :: Expr s a
     }
 
 makeKeyValue :: NonEmpty Text -> Expr s a -> KeyValue s a
@@ -1713,20 +1737,20 @@ makeKeyValue keys expr = KeyValue (adapt <$> keys) Nothing expr
 {- This utility function converts
    `{ x = { y = { z = 1 } } }` to `{ x.y.z = 1 }`
 -}
-consolidateRecordLiteral :: Map Text (RecordField Src a) -> [KeyValue Src a]
+consolidateRecordLiteral :: Map Text (RecordField s a) -> [KeyValue s a]
 consolidateRecordLiteral = concatMap adapt . Map.toList
   where
-    adapt :: (Text, RecordField Src a) -> [KeyValue Src a]
-    adapt (key, RecordField mSrc0 val mSrc1 mSrc2)
-        | not (containsComment mSrc2)
+    adapt :: (Text, RecordField s a) -> [KeyValue s a]
+    adapt (key, RecordField mComment0 _ val mComment1 mComment2)
+        | Nothing <- mComment2
         , RecordLit m <- e
-        , [ KeyValue keys mSrc2' val' ] <- concatMap adapt (Map.toList m) =
-            [ KeyValue (NonEmpty.cons (mSrc0, key, mSrc1) keys) mSrc2' val' ]
+        , [ KeyValue keys mComment2' val' ] <- concatMap adapt (Map.toList m) =
+            [ KeyValue (NonEmpty.cons (mComment0, key, mComment1) keys) mComment2' val' ]
 
         | Combine _ (Just _) l r <- e =
             adapt (key, makeRecordField l) <> adapt (key, makeRecordField r)
         | otherwise =
-            [ KeyValue (pure (mSrc0, key, mSrc1)) mSrc2 val ]
+            [ KeyValue (pure (mComment0, key, mComment1)) mComment2 val ]
       where
         e = shallowDenote val
 

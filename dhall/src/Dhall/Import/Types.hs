@@ -20,7 +20,7 @@ import Dhall.Core
     , URL
     )
 import Dhall.Map                        (Map)
-import Dhall.Parser                     (Src)
+import Dhall.Parser                     (Src, WhitespaceControl (UnsupportedCommentsPermitted))
 import Lens.Family                      (LensLike')
 
 #ifdef WITH_HTTP
@@ -115,6 +115,8 @@ data Status = Status
     , _cacheWarning :: CacheWarning
     -- ^ Records whether or not we already warned the user about issues with
     --   cache directory
+
+    , _commentControl :: WhitespaceControl
     }
 
 -- | Initial `Status`, parameterised over the HTTP 'Manager' and the remote
@@ -143,6 +145,8 @@ emptyStatusWith _newManager _remote rootImport = Status {..}
     _semanticCacheMode = UseSemanticCache
 
     _cacheWarning = CacheNotWarned
+
+    _commentControl = UnsupportedCommentsPermitted
 
 -- | Lens from a `Status` to its `_stack` field
 stack :: Functor f => LensLike' f Status (NonEmpty Chained)

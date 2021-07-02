@@ -514,7 +514,7 @@ decodeExpressionInternal decodeEmbed = go
 
                                     a <- go
 
-                                    return (Binding Nothing x Nothing mA Nothing a)
+                                    return (Binding Nothing x Nothing Nothing mA Nothing a)
 
                                 b <- go
 
@@ -902,7 +902,7 @@ encodeExpressionInternal encodeEmbed = go
           where
             MultiLet as b₁ = Syntax.multiLet a₀ b₀
 
-            encodeBinding (Binding _ x _ mA₀ _ a) =
+            encodeBinding (Binding _ x _ _ mA₀ _ a) =
                 [ Encoding.encodeString x
                 , mA₁
                 , go a

@@ -743,8 +743,8 @@ convertToHomogeneousMaps (Conversion {..}) e0 = loop (Core.normalize e0)
             a' = loop a
             b' = loop b
 
-        Core.Let (Binding src0 a src1 b src2 c) d ->
-            Core.Let (Binding src0 a src1 b' src2 c') d'
+        Core.Let (Binding comment0 a src comment1 b comment2 c) d ->
+            Core.Let (Binding comment0 a src comment1 b' comment2 c') d'
           where
             b' = fmap (fmap loop) b
             c' =            loop  c

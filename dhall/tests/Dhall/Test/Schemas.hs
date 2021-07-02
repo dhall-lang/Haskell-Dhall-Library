@@ -48,7 +48,7 @@ schemaTest prefix =
 
         inputText  <- Text.IO.readFile inputFile
 
-        (header, parsedInput) <- Core.throws (Parser.exprAndHeaderFromText mempty inputText)
+        (header, parsedInput) <- Core.throws (Parser.exprAndHeaderFromText Parser.UnsupportedCommentsPermitted mempty inputText)
 
         parsedSchema <- Core.throws (Parser.exprFromText mempty (Test.Util.toDhallPath (prefix <> "Schema.dhall")))
 

@@ -39,7 +39,6 @@ import Data.Text                           (Text)
 import Data.Void                           (Void)
 import Dhall.Context                       (Context)
 import Dhall.Import                        (hashExpressionToCode)
-import Dhall.Parser                        (Parser (..))
 import Dhall.Pretty                        (CharacterSet (..))
 import Dhall.Src                           (Src)
 import System.Console.Haskeline            (Interrupt (..))
@@ -75,7 +74,6 @@ import qualified System.Console.ANSI
 import qualified System.Console.Haskeline.Completion       as Haskeline
 import qualified System.Console.Repline                    as Repline
 import qualified System.IO
-import qualified Text.Megaparsec                           as Megaparsec
 
 #if MIN_VERSION_haskeline(0,8,0)
 import qualified Control.Monad.Catch
@@ -203,7 +201,7 @@ applyContext context expression =
     definitions = reverse $ Dhall.Context.toList context
 
     convertBinding (variable, Binding expr _) =
-        Dhall.Core.Binding Nothing variable Nothing Nothing Nothing expr
+        Dhall.Core.Binding Nothing variable Nothing Nothing Nothing Nothing expr
 
     bindings = fmap convertBinding definitions
 
@@ -238,7 +236,7 @@ parseAssignment str
 
 addBinding :: ( MonadFail m, MonadIO m, MonadState Env m ) => Either String (String, String) -> m ()
 addBinding (Right (k, src)) = do
-  varName <- case Megaparsec.parse (unParser Parser.Token.label) "(input)" (Text.pack k) of
+  varName <- case Dhall.runParser Parser.Token.label Dhall.UnsupportedCommentsForbidden "(input)" (Text.pack k) of
       Left   _      -> Fail.fail "Invalid variable name"
       Right varName -> return varName
 
