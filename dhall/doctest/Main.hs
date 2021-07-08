@@ -38,6 +38,7 @@ main = do
             [ "-DWITH_HTTP"
             , "-DUSE_HTTP_CLIENT_TLS"
             , "--fast"
+            , "--verbose"
             , prefix </> "ghc-src"
 
             -- Unfortunately we cannot target the entire @src@ directory.
