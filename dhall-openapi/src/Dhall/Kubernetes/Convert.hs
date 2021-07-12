@@ -105,9 +105,9 @@ namespacedObjectFromImport :: Dhall.Import -> Maybe Text
 namespacedObjectFromImport Dhall.Import
   { importHashed = Dhall.ImportHashed
     { importType = Dhall.Local Dhall.Here Dhall.File
-      { file = f , .. }
-    , .. }
-  , .. } = Just $ Text.replace ".dhall" "" f
+      { file = f }
+    }
+  } = Just $ Text.replace ".dhall" "" f
 namespacedObjectFromImport _ = Nothing
 
 -- | Get a Dhall Text literal from a lone string
