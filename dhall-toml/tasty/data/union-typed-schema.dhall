@@ -1,0 +1,1 @@
+{ value : < A : Natural | B> }
